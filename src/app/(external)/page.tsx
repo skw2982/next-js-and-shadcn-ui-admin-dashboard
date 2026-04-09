@@ -42,8 +42,11 @@ export default function SeokyeongwonLiveDashboard() {
   }, []);
 
   if (loading) return (
-    <div style={{backgroundColor: '#0c0e12', color: 'white', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif'}}>
-      <p style={{fontSize: '1.5rem', fontWeight: 'bold'}}>CONNECTING TO ASSETS...</p>
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white font-bold">
+      <div className="text-center">
+        <div className="mb-4 text-4xl animate-bounce">📈</div>
+        <p className="text-xl tracking-widest">CONNECTING TO ASSETS...</p>
+      </div>
     </div>
   );
 
@@ -53,72 +56,74 @@ export default function SeokyeongwonLiveDashboard() {
   const totalYield = totalBuy > 0 ? ((totalProfit / totalBuy) * 100).toFixed(2) : "0.00";
 
   return (
-    <div style={{backgroundColor: '#0c0e12', color: '#e2e8f0', minHeight: '100vh', padding: '40px 20px', fontFamily: 'sans-serif'}}>
-      <div style={{maxWidth: '1100px', margin: '0 auto'}}>
+    <div className="min-h-screen bg-[#0c0e12] text-slate-200 p-6 md:p-12 font-sans">
+      <div className="max-w-4xl mx-auto">
         
         {/* Header */}
-        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '40px'}}>
+        <div className="flex justify-between items-center mb-10">
           <div>
-            <h1 style={{fontSize: '2rem', fontWeight: '900', color: 'white', margin: 0, fontStyle: 'italic'}}>SEOKYEONGWON ASSETS</h1>
-            <p style={{color: '#64748b', fontSize: '0.9rem', marginTop: '5px'}}>LG MDI Accounting Dept · Real-time Portfolio</p>
+            <h1 className="text-3xl font-black text-white italic tracking-tighter uppercase">SEOKYEONGWON ASSETS</h1>
+            <p className="text-slate-500 text-sm mt-1">LG MDI Accounting Dept · Real-time Dashboard</p>
           </div>
-          <div style={{fontSize: '0.7rem', color: '#38bdf8', border: '1px solid #1e293b', padding: '8px 15px', borderRadius: '15px', backgroundColor: '#161a22'}}>
-            LIVE STATUS: {lastUpdated}
-          </div>
-        </div>
-
-        {/* Main Card */}
-        <div style={{background: 'linear-gradient(135deg, #2563eb, #4338ca)', padding: '40px', borderRadius: '30px', marginBottom: '30px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.3)'}}>
-          <p style={{fontSize: '0.8rem', fontWeight: 'bold', color: '#dbeafe', marginBottom: '10px', letterSpacing: '2px'}}>CURRENT ASSET VALUE</p>
-          <h2 style={{fontSize: '3.5rem', fontWeight: '900', color: 'white', margin: '0 0 30px 0'}}>
-            {Math.round(totalValue).toLocaleString()} <span style={{fontSize: '1.5rem', fontWeight: 'normal', opacity: 0.7}}>KRW</span>
-          </h2>
-          <div style={{display: 'flex', gap: '40px', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '20px'}}>
-            <div>
-              <p style={{fontSize: '0.7rem', color: '#bfdbfe', margin: '0 0 5px 0'}}>PROFIT/LOSS (평가손익)</p>
-              <p style={{fontSize: '1.5rem', fontWeight: 'bold', color: 'white', margin: 0}}>{totalProfit >= 0 ? '+' : ''}{Math.round(totalProfit).toLocaleString()}원</p>
-            </div>
-            <div>
-              <p style={{fontSize: '0.7rem', color: '#bfdbfe', margin: '0 0 5px 0'}}>TOTAL YIELD (%)</p>
-              <p style={{fontSize: '1.5rem', fontWeight: 'bold', color: 'white', margin: 0}}>{totalYield}%</p>
-            </div>
+          <div className="hidden md:block bg-slate-900 border border-slate-800 px-4 py-2 rounded-2xl text-[10px] text-sky-400 font-mono">
+            LIVE UPDATED: {lastUpdated}
           </div>
         </div>
 
-        {/* Table Area */}
-        <div style={{backgroundColor: '#161a22', borderRadius: '30px', border: '1px solid #1e293b', overflow: 'hidden'}}>
-          <div style={{padding: '20px 30px', borderBottom: '1px solid #1e293b', fontWeight: 'bold', color: 'white'}}>
-            HOLDINGS ({stocks.length})
+        {/* Total Asset Card */}
+        <div className="bg-gradient-to-br from-blue-600 to-indigo-800 p-8 rounded-[40px] shadow-2xl mb-8 relative overflow-hidden">
+          <div className="relative z-10">
+            <p className="text-blue-100/70 text-xs font-bold uppercase tracking-widest mb-2">Total Valuation</p>
+            <h2 className="text-5xl md:text-6xl font-black text-white mb-8 tracking-tighter">
+              {Math.round(totalValue).toLocaleString()} <span className="text-xl font-normal opacity-60">KRW</span>
+            </h2>
+            <div className="grid grid-cols-2 gap-8 border-t border-white/10 pt-6">
+              <div>
+                <p className="text-blue-100/50 text-[10px] font-bold uppercase mb-1">Profit/Loss</p>
+                <p className="text-2xl font-black text-white">
+                  {totalProfit >= 0 ? '+' : ''}{Math.round(totalProfit).toLocaleString()}
+                </p>
+              </div>
+              <div>
+                <p className="text-blue-100/50 text-[10px] font-bold uppercase mb-1">Yield (%)</p>
+                <p className="text-2xl font-black text-white">{totalYield}%</p>
+              </div>
+            </div>
           </div>
-          <div style={{overflowX: 'auto'}}>
-            <table style={{width: '100%', textAlign: 'left', borderCollapse: 'collapse'}}>
+          <div className="absolute right-[-20px] bottom-[-20px] text-white/5 text-[15rem] font-black italic select-none">KRW</div>
+        </div>
+
+        {/* Stock List Table */}
+        <div className="bg-[#161a22] rounded-[40px] border border-slate-800 overflow-hidden shadow-xl">
+          <div className="px-8 py-6 border-b border-slate-800 font-bold text-white flex justify-between items-center">
+            <span>HOLDINGS ({stocks.length})</span>
+            <span className="text-[10px] text-emerald-400 animate-pulse uppercase">● Market Live</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
               <thead>
-                <tr style={{fontSize: '0.7rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px', borderBottom: '1px solid #1e293b'}}>
-                  <th style={{padding: '20px 30px'}}>Asset</th>
-                  <th style={{padding: '20px 30px'}}>Quantity</th>
-                  <th style={{padding: '20px 30px'}}>Price (Avg/Current)</th>
-                  <th style={{padding: '20px 30px', textAlign: 'right'}}>Profit</th>
+                <tr className="text-slate-600 text-[10px] uppercase font-black tracking-widest border-b border-slate-800">
+                  <th className="px-8 py-4">Asset</th>
+                  <th className="px-8 py-4">Qty</th>
+                  <th className="px-8 py-4 text-right">Yield</th>
                 </tr>
               </thead>
-              <tbody>
-                {stocks.map((stock, idx) => {
-                  const profit = (stock.current - stock.avg) * stock.qty;
+              <tbody className="divide-y divide-slate-800/50">
+                {stocks.sort((a,b) => (b.current*b.qty)-(a.current*a.qty)).map((stock, idx) => {
                   const yieldRate = ((stock.current - stock.avg) / stock.avg * 100).toFixed(2);
                   const isUp = parseFloat(yieldRate) >= 0;
                   return (
-                    <tr key={idx} style={{borderBottom: '1px solid #0f172a'}}>
-                      <td style={{padding: '25px 30px'}}>
-                        <div style={{fontWeight: 'bold', color: 'white'}}>{stock.name}</div>
-                        <div style={{fontSize: '0.7rem', color: '#475569', marginTop: '4px'}}>{stock.code}</div>
+                    <tr key={idx} className="hover:bg-white/[0.02] transition-colors group">
+                      <td className="px-8 py-6">
+                        <div className="font-bold text-white group-hover:text-sky-400 transition-colors">{stock.name}</div>
+                        <div className="text-[10px] text-slate-600 font-mono mt-1">{stock.code}</div>
                       </td>
-                      <td style={{padding: '25px 30px', fontSize: '0.9rem'}}>{stock.qty.toLocaleString()} 주</td>
-                      <td style={{padding: '25px 30px'}}>
-                        <div style={{fontSize: '0.7rem', color: '#475569', marginBottom: '4px'}}>AVG: {Math.round(stock.avg).toLocaleString()}</div>
-                        <div style={{fontSize: '1rem', fontWeight: 'bold', color: '#f1f5f9'}}>{Math.round(stock.current).toLocaleString()} 원</div>
+                      <td className="px-8 py-6 text-sm text-slate-400">
+                        {stock.qty.toLocaleString()} <span className="text-[10px] opacity-40">주</span>
                       </td>
-                      <td style={{padding: '25px 30px', textAlign: 'right', fontWeight: 'bold', color: isUp ? '#f43f5e' : '#3b82f6'}}>
-                        <div style={{fontSize: '1.1rem'}}>{isUp ? '▲' : '▼'} {yieldRate}%</div>
-                        <div style={{fontSize: '0.7rem', opacity: 0.8, marginTop: '4px'}}>{Math.round(profit).toLocaleString()} 원</div>
+                      <td className={`px-8 py-6 text-right font-bold ${isUp ? 'text-rose-500' : 'text-blue-500'}`}>
+                        <div className="text-lg tracking-tighter">{isUp ? '▲' : '▼'} {yieldRate}%</div>
+                        <div className="text-[10px] opacity-70 mt-1">{Math.round((stock.current-stock.avg)*stock.qty).toLocaleString()} 원</div>
                       </td>
                     </tr>
                   );
