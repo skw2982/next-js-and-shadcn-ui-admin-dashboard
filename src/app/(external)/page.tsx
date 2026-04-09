@@ -12,7 +12,10 @@ interface Realized { date: string; name: string; qty: number; profit: number; yi
 export default function MasterAssetDashboard() {
   const [activeTab, setActiveTab] = useState('overview');
   const [isClient, setIsClient] = useState(false);
-  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc'); 
+  
+  // --- 정렬 상태 관리 ---
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc'); // 주식 탭 수익률 정렬
+  const [realizedSortOrder, setRealizedSortOrder] = useState<'desc' | 'asc'>('desc'); // 실현손익 탭 날짜 정렬 (새로 추가)
 
   // 실시간 환율 상태
   const [exchangeRate, setExchangeRate] = useState(1350); 
@@ -118,7 +121,7 @@ export default function MasterAssetDashboard() {
             note: c[5] || ""
           };
         }).filter(r => r.date);
-        setRealized(parsedReal.reverse()); // 최신순 정렬
+        setRealized(parsedReal); // 정렬은 아래 sortedRealized에서 처리함
       }
 
       setLoading(false);
@@ -152,9 +155,12 @@ export default function MasterAssetDashboard() {
   const removeSaving = (id: number) => setSavings(savings.filter(s => s.id !== id));
   const updateSaving = (id: number, field: string, val: string | number) => setSavings(savings.map(s => s.id === id ? { ...s, [field]: val } : s));
 
+  // --- 정렬 토글 함수 ---
   const toggleSortOrder = () => setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc');
+  const toggleRealizedSortOrder = () => setRealizedSortOrder(prev => prev === 'desc' ? 'asc' : 'desc');
 
-  // 주식 정렬 및 가치 계산
+  // --- 정렬 로직 ---
+  // 1. 주식 수익률 정렬
   const sortedStocks = [...stocks].sort((a, b) => {
     const isUS_A = a.market.includes('해외');
     const isUS_B = b.market.includes('해외');
@@ -167,6 +173,14 @@ export default function MasterAssetDashboard() {
     return sortOrder === 'desc' ? yieldB - yieldA : yieldA - yieldB;
   });
 
+  // 2. 실현손익 날짜 정렬 (새로 추가)
+  const sortedRealized = [...realized].sort((a, b) => {
+    const dateA = new Date(a.date).getTime() || 0;
+    const dateB = new Date(b.date).getTime() || 0;
+    return realizedSortOrder === 'desc' ? dateB - dateA : dateA - dateB;
+  });
+
+  // --- 계산 로직 ---
   const totalStockValue = stocks.reduce((acc, s) => {
     const krwVal = s.market.includes('해외') ? (s.current * exchangeRate) : s.current;
     return acc + (krwVal * s.qty);
@@ -264,7 +278,7 @@ export default function MasterAssetDashboard() {
           </div>
         )}
 
-        {/* --- 2페이지: 보유 주식 (정렬 가능) --- */}
+        {/* --- 2페이지: 보유 주식 --- */}
         {activeTab === 'stocks' && (
           <div className="bg-[#161a22] rounded-[40px] border border-slate-800 overflow-hidden shadow-2xl animate-in fade-in duration-500">
             <div className="px-8 py-6 border-b border-slate-800 flex justify-between items-center bg-slate-900/40">
@@ -420,13 +434,22 @@ export default function MasterAssetDashboard() {
                 <table className="w-full text-left">
                   <thead>
                     <tr className="text-slate-500 text-[10px] uppercase font-black tracking-widest border-b border-slate-800 bg-slate-900/20">
-                      <th className="px-8 py-4">매도일자 / 종목명</th>
+                      {/* 날짜 정렬 클릭 버튼 추가 */}
+                      <th className="px-8 py-4 cursor-pointer hover:text-white transition-colors group select-none" onClick={toggleRealizedSortOrder}>
+                        <div className="flex items-center gap-1">
+                          매도일자 / 종목명
+                          <span className="text-[8px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded group-hover:bg-slate-700">
+                            {realizedSortOrder === 'desc' ? '▼최신순' : '▲과거순'}
+                          </span>
+                        </div>
+                      </th>
                       <th className="px-8 py-4 text-center">매도수량</th>
                       <th className="px-8 py-4 text-right">실현손익금 / 수익률</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/50">
-                    {realized.map((r, i) => {
+                    {/* 정렬된 배열(sortedRealized) 매핑 */}
+                    {sortedRealized.map((r, i) => {
                       const isUp = r.profit >= 0;
                       return (
                         <tr key={i} className="hover:bg-white/[0.02] transition-colors">
