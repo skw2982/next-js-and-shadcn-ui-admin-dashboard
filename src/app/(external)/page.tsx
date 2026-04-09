@@ -3,16 +3,20 @@
 import React, { useState, useEffect } from 'react';
 
 // --- 데이터 규격 정의 ---
-interface Stock { name: string; code: string; qty: number; avg: number; current: number; }
+interface Stock { market: string; name: string; code: string; qty: number; avg: number; current: number; }
 interface Asset { id: number; name: string; value: number; }
 interface Debt { id: number; name: string; value: number; }
 interface Saving { id: number; name: string; monthly: number; current: number; monthsLeft: number; }
 
 export default function MasterAssetDashboard() {
   const [activeTab, setActiveTab] = useState('overview');
-  const [isClient, setIsClient] = useState(false); // 로컬 스토리지 안전 로드용
+  const [isClient, setIsClient] = useState(false);
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc'); 
 
-  // --- 주식 데이터 상태 (구글 시트 연동) ---
+  // --- 실시간 환율 상태 ---
+  const [exchangeRate, setExchangeRate] = useState(1350); // API 로드 전 임시 기본값
+
+  // --- 주식 데이터 상태 ---
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [loadingStocks, setLoadingStocks] = useState(true);
   const [lastUpdated, setLastUpdated] = useState("");
@@ -31,7 +35,7 @@ export default function MasterAssetDashboard() {
     { id: 2, name: "주택청약", monthly: 100000, current: 3500000, monthsLeft: 120 }
   ]);
 
-  // --- 로컬 스토리지 로드 & 저장 ---
+  // 로컬 스토리지 로드
   useEffect(() => {
     setIsClient(true);
     const savedAssets = localStorage.getItem('myAssets');
@@ -42,6 +46,7 @@ export default function MasterAssetDashboard() {
     if (savedSavings) setSavings(JSON.parse(savedSavings));
   }, []);
 
+  // 로컬 스토리지 저장
   useEffect(() => {
     if (isClient) {
       localStorage.setItem('myAssets', JSON.stringify(assets));
@@ -50,12 +55,25 @@ export default function MasterAssetDashboard() {
     }
   }, [assets, debts, savings, isClient]);
 
-  // --- 구글 시트 데이터 로드 ---
+  // --- 실시간 환율 API 호출 ---
+  const fetchExchangeRate = async () => {
+    try {
+      const res = await fetch('https://open.er-api.com/v6/latest/USD');
+      const data = await res.json();
+      if (data && data.rates && data.rates.KRW) {
+        setExchangeRate(data.rates.KRW);
+      }
+    } catch(e) {
+      console.error("환율 로드 실패", e);
+    }
+  };
+
   const cleanNum = (val: string) => {
     if (!val) return 0;
     return parseFloat(val.replace(/[,"'원\s]/g, '')) || 0;
   };
 
+  // --- 구글 시트 데이터 로드 ---
   const fetchStocks = async () => {
     try {
       const response = await fetch(`${SHEET_CSV_URL}&t=${new Date().getTime()}`);
@@ -64,6 +82,7 @@ export default function MasterAssetDashboard() {
       if (rows.length < 2) return;
 
       const headers = rows[0].split(',').map(h => h.replace(/"/g, '').trim());
+      const idxMarket = headers.findIndex(h => h.includes("구분") || h.includes("시장"));
       const idxName = headers.findIndex(h => h.includes("종목") || h.includes("이름"));
       const idxCode = headers.findIndex(h => h.includes("티커"));
       const idxQty = headers.findIndex(h => h.includes("수량"));
@@ -71,6 +90,7 @@ export default function MasterAssetDashboard() {
       const idxCurrent = headers.findIndex(h => h.includes("현재가"));
 
       const finalIdx = {
+        market: idxMarket !== -1 ? idxMarket : -1,
         name: idxName !== -1 ? idxName : 0, code: idxCode !== -1 ? idxCode : 1,
         qty: idxQty !== -1 ? idxQty : 3, avg: idxAvg !== -1 ? idxAvg : 4, current: idxCurrent !== -1 ? idxCurrent : 5
       };
@@ -78,6 +98,7 @@ export default function MasterAssetDashboard() {
       const parsed: Stock[] = rows.slice(1).map(row => {
         const c = row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(v => v.replace(/"/g, '').trim());
         return {
+          market: finalIdx.market !== -1 ? (c[finalIdx.market] || "국내") : "국내",
           name: c[finalIdx.name] || "Unknown", code: c[finalIdx.code] || "",
           qty: cleanNum(c[finalIdx.qty]), avg: cleanNum(c[finalIdx.avg]), current: cleanNum(c[finalIdx.current])
         };
@@ -93,32 +114,50 @@ export default function MasterAssetDashboard() {
   };
 
   useEffect(() => {
+    fetchExchangeRate();
     fetchStocks();
-    const interval = setInterval(fetchStocks, 60000);
+    const interval = setInterval(() => {
+      fetchExchangeRate();
+      fetchStocks();
+    }, 60000);
     return () => clearInterval(interval);
   }, []);
 
-  // --- 항목 추가/삭제 핸들러 ---
   const addAsset = () => setAssets([...assets, { id: Date.now(), name: '새 자산', value: 0 }]);
   const removeAsset = (id: number) => setAssets(assets.filter(a => a.id !== id));
-  const updateAsset = (id: number, field: string, val: string | number) => {
-    setAssets(assets.map(a => a.id === id ? { ...a, [field]: val } : a));
-  };
+  const updateAsset = (id: number, field: string, val: string | number) => setAssets(assets.map(a => a.id === id ? { ...a, [field]: val } : a));
 
   const addDebt = () => setDebts([...debts, { id: Date.now(), name: '새 부채', value: 0 }]);
   const removeDebt = (id: number) => setDebts(debts.filter(d => d.id !== id));
-  const updateDebt = (id: number, field: string, val: string | number) => {
-    setDebts(debts.map(d => d.id === id ? { ...d, [field]: val } : d));
-  };
+  const updateDebt = (id: number, field: string, val: string | number) => setDebts(debts.map(d => d.id === id ? { ...d, [field]: val } : d));
 
   const addSaving = () => setSavings([...savings, { id: Date.now(), name: '새 예적금', monthly: 0, current: 0, monthsLeft: 12 }]);
   const removeSaving = (id: number) => setSavings(savings.filter(s => s.id !== id));
-  const updateSaving = (id: number, field: string, val: string | number) => {
-    setSavings(savings.map(s => s.id === id ? { ...s, [field]: val } : s));
-  };
+  const updateSaving = (id: number, field: string, val: string | number) => setSavings(savings.map(s => s.id === id ? { ...s, [field]: val } : s));
 
-  // --- 계산 로직 ---
-  const totalStockValue = stocks.reduce((acc, s) => acc + (s.current * s.qty), 0);
+  // --- 주식 정렬 (환율 적용된 원화 기준 수익률) ---
+  const sortedStocks = [...stocks].sort((a, b) => {
+    const isUS_A = a.market.includes('해외');
+    const isUS_B = b.market.includes('해외');
+    const krwAvgA = isUS_A ? a.avg * exchangeRate : a.avg;
+    const krwCurrentA = isUS_A ? a.current * exchangeRate : a.current;
+    const krwAvgB = isUS_B ? b.avg * exchangeRate : b.avg;
+    const krwCurrentB = isUS_B ? b.current * exchangeRate : b.current;
+    
+    const yieldA = krwAvgA > 0 ? (krwCurrentA - krwAvgA) / krwAvgA : 0;
+    const yieldB = krwAvgB > 0 ? (krwCurrentB - krwAvgB) / krwAvgB : 0;
+    return sortOrder === 'desc' ? yieldB - yieldA : yieldA - yieldB;
+  });
+
+  const toggleSortOrder = () => setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc');
+
+  // --- 총 자산 계산 (환율 적용) ---
+  const totalStockValue = stocks.reduce((acc, s) => {
+    const isUS = s.market.includes('해외');
+    const krwVal = isUS ? (s.current * exchangeRate) : s.current;
+    return acc + (krwVal * s.qty);
+  }, 0);
+
   const totalOtherAssets = assets.reduce((acc, a) => acc + a.value, 0);
   const totalSavings = savings.reduce((acc, s) => acc + s.current, 0);
   const totalLiabilities = debts.reduce((acc, d) => acc + d.value, 0);
@@ -128,7 +167,7 @@ export default function MasterAssetDashboard() {
   const debtRatio = totalAssets > 0 ? (totalLiabilities / totalAssets) * 100 : 0;
 
   if (!isClient || loadingStocks) return (
-    <div className="min-h-screen bg-[#0c0e12] flex items-center justify-center text-white animate-pulse">
+    <div className="min-h-screen bg-[#0c0e12] flex items-center justify-center text-white font-black animate-pulse">
       SYSTEM INITIALIZING...
     </div>
   );
@@ -137,13 +176,18 @@ export default function MasterAssetDashboard() {
     <div className="min-h-screen bg-[#0c0e12] text-slate-200 p-4 md:p-8 font-sans">
       <div className="max-w-5xl mx-auto">
         
-        {/* 헤더 */}
-        <header className="mb-8">
-          <h1 className="text-3xl md:text-4xl font-black text-white italic tracking-tighter uppercase">INTEGRATED ASSET BOARD</h1>
-          <p className="text-slate-500 text-xs mt-1 font-bold tracking-widest uppercase">LG MDI Accounting Dept · Net Worth Tracking</p>
+        <header className="mb-8 flex justify-between items-end">
+          <div>
+            <h1 className="text-3xl md:text-4xl font-black text-white italic tracking-tighter uppercase">INTEGRATED ASSET BOARD</h1>
+            <p className="text-slate-500 text-xs mt-1 font-bold tracking-widest uppercase">LG MDI Accounting Dept · Net Worth Tracking</p>
+          </div>
+          <div className="text-right">
+            <div className="text-[10px] text-amber-400 font-mono bg-amber-900/20 border border-amber-900/50 px-3 py-1 rounded-full mb-1">
+              $1 = {Math.round(exchangeRate).toLocaleString()}원
+            </div>
+          </div>
         </header>
 
-        {/* 탭 네비게이션 */}
         <div className="flex overflow-x-auto gap-2 mb-8 pb-2 scrollbar-hide">
           {['overview', 'stocks', 'realestate', 'savings'].map((tab) => (
             <button 
@@ -163,7 +207,7 @@ export default function MasterAssetDashboard() {
           ))}
         </div>
 
-        {/* --- 1페이지: 통합 요약 (Overview) --- */}
+        {/* --- 1페이지: 통합 요약 --- */}
         {activeTab === 'overview' && (
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="bg-gradient-to-br from-indigo-900 via-slate-900 to-[#0c0e12] p-8 md:p-12 rounded-[40px] border border-indigo-500/30 relative overflow-hidden">
@@ -204,33 +248,60 @@ export default function MasterAssetDashboard() {
           </div>
         )}
 
-        {/* --- 2페이지: 주식 상세 (Stocks - Read Only from Sheet) --- */}
+        {/* --- 2페이지: 주식 상세 --- */}
         {activeTab === 'stocks' && (
           <div className="bg-[#161a22] rounded-[40px] border border-slate-800 overflow-hidden shadow-2xl animate-in fade-in duration-500">
             <div className="px-8 py-6 border-b border-slate-800 flex justify-between items-center bg-slate-900/40">
-              <span className="font-black text-white text-sm">구글 시트 실시간 연동 중 (수정은 시트에서)</span>
+              <span className="font-black text-white text-sm">포트폴리오 현황 (해외주식 실시간 환율 적용)</span>
               <span className="text-[10px] text-sky-400 font-mono bg-slate-900 px-3 py-1 rounded-full">{lastUpdated}</span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left">
                 <thead>
                   <tr className="text-slate-500 text-[10px] uppercase font-black tracking-widest border-b border-slate-800 bg-slate-900/20">
-                    <th className="px-8 py-4">종목명</th>
-                    <th className="px-8 py-4 text-center">수량/평단</th>
-                    <th className="px-8 py-4 text-right">수익률/손익</th>
+                    <th className="px-8 py-4">구분 / 종목명</th>
+                    <th className="px-8 py-4 text-center">수량 / 평단</th>
+                    <th 
+                      className="px-8 py-4 text-right cursor-pointer hover:text-white transition-colors group select-none"
+                      onClick={toggleSortOrder}
+                    >
+                      <div className="flex items-center justify-end gap-1">
+                        원화환산 수익률/손익
+                        <span className="text-[8px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded group-hover:bg-slate-700">
+                          {sortOrder === 'desc' ? '▼내림차순' : '▲오름차순'}
+                        </span>
+                      </div>
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/50">
-                  {stocks.sort((a,b) => (b.current*b.qty)-(a.current*a.qty)).map((s, i) => {
-                    const yieldRate = ((s.current - s.avg) / s.avg * 100).toFixed(2);
-                    const profit = (s.current - s.avg) * s.qty;
+                  {sortedStocks.map((s, i) => {
+                    const isUS = s.market.includes('해외');
+                    
+                    // 원화 환산 계산
+                    const krwAvg = isUS ? s.avg * exchangeRate : s.avg;
+                    const krwCurrent = isUS ? s.current * exchangeRate : s.current;
+                    
+                    const yieldRate = krwAvg > 0 ? ((krwCurrent - krwAvg) / krwAvg * 100).toFixed(2) : "0.00";
+                    const profit = (krwCurrent - krwAvg) * s.qty;
                     const isUp = parseFloat(yieldRate) >= 0;
+
+                    // 표기용 달러/원화 포맷팅
+                    const displayAvg = isUS ? `$${s.avg.toFixed(2)}` : `${Math.round(s.avg).toLocaleString()}원`;
+
                     return (
                       <tr key={i} className="hover:bg-white/[0.02] transition-all">
-                        <td className="px-8 py-6 font-bold text-white">{s.name}</td>
+                        <td className="px-8 py-6">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className={`text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-widest ${isUS ? 'bg-amber-900/30 text-amber-500' : 'bg-blue-900/30 text-blue-400'}`}>
+                              {isUS ? 'US' : 'KR'}
+                            </span>
+                            <span className="font-bold text-white text-base">{s.name}</span>
+                          </div>
+                        </td>
                         <td className="px-8 py-6 text-center">
                           <div className="text-sm font-bold text-slate-300">{s.qty.toLocaleString()}주</div>
-                          <div className="text-[10px] text-slate-500">평단: {Math.round(s.avg).toLocaleString()}</div>
+                          <div className="text-[10px] text-slate-500">평단: {displayAvg}</div>
                         </td>
                         <td className={`px-8 py-6 text-right font-black ${isUp ? 'text-rose-500' : 'text-blue-500'}`}>
                           <div className="text-lg leading-none mb-1">{isUp ? '▲' : '▼'} {yieldRate}%</div>
@@ -245,10 +316,9 @@ export default function MasterAssetDashboard() {
           </div>
         )}
 
-        {/* --- 3페이지: 실물/부채 관리 (Dynamic Addition) --- */}
+        {/* --- 3페이지: 실물/부채 관리 --- */}
         {activeTab === 'realestate' && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in duration-500">
-            {/* 자산 섹션 */}
             <div className="bg-slate-900 p-8 rounded-[40px] border border-slate-800 relative">
               <div className="flex justify-between items-center mb-6">
                 <h3 className="text-xl font-black text-white">기타 실물 자산</h3>
@@ -265,7 +335,6 @@ export default function MasterAssetDashboard() {
               </div>
             </div>
 
-            {/* 부채 섹션 */}
             <div className="bg-rose-900/10 p-8 rounded-[40px] border border-rose-900/30 relative">
               <div className="flex justify-between items-center mb-6">
                 <h3 className="text-xl font-black text-rose-400">부채 내역</h3>
@@ -284,7 +353,7 @@ export default function MasterAssetDashboard() {
           </div>
         )}
 
-        {/* --- 4페이지: 예적금 관리 (Dynamic Addition) --- */}
+        {/* --- 4페이지: 예적금 관리 --- */}
         {activeTab === 'savings' && (
           <div className="bg-slate-900 rounded-[40px] border border-slate-800 overflow-hidden p-8 animate-in fade-in duration-500">
             <div className="flex justify-between items-center mb-6">
