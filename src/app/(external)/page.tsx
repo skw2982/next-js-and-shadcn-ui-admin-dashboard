@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from 'react';
 
-// 데이터 규격 정의
 interface Stock {
   name: string;
   code: string;
@@ -11,142 +10,169 @@ interface Stock {
   current: number;
 }
 
-export default function SeokyeongwonDashboard() {
+export default function SeokyeongwonSmartDashboard() {
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
 
   const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOtqLayVYNftdkuatjh1_z-8xVj1EgYGRU3L5O_NAPjQDSVGlK/pub?gid=0&single=true&output=csv";
 
-  // 회계 데이터용 숫자 정제 함수 (콤마, 따옴표 제거)
   const cleanNum = (val: string) => {
     if (!val) return 0;
-    return parseFloat(val.replace(/[," ]/g, '')) || 0;
+    return parseFloat(val.replace(/[,"'원\s]/g, '')) || 0;
   };
 
   const fetchData = async () => {
     try {
-      const response = await fetch(SHEET_CSV_URL);
+      const response = await fetch(`${SHEET_CSV_URL}&t=${new Date().getTime()}`);
       const csvText = await response.text();
-      const rows = csvText.split('\n').map(row => row.trim()).filter(row => row);
-      const dataRows = rows.slice(1); // 첫 줄 헤더 제외
+      const rows = csvText.split('\n').map(r => r.trim()).filter(r => r);
+      
+      if (rows.length < 2) {
+        setErrorMsg("시트에 데이터가 부족합니다.");
+        return;
+      }
 
-      const parsed: Stock[] = dataRows.map(row => {
-        // 따옴표 안의 콤마를 무시하고 분리
-        const cols = row.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g) || [];
-        const c = cols.map(v => v.replace(/"/g, '').trim());
+      // 1. 헤더 분석: 코드가 직접 열의 위치를 찾습니다.
+      const headers = rows[0].split(',').map(h => h.replace(/"/g, '').trim());
+      
+      const idxName = headers.findIndex(h => h.includes("종목") || h.includes("이름") || h.includes("Asset"));
+      const idxCode = headers.findIndex(h => h.includes("티커") || h.includes("코드") || h.includes("Ticker"));
+      const idxQty = headers.findIndex(h => h.includes("수량") || h.includes("Qty") || h.includes("보유"));
+      const idxAvg = headers.findIndex(h => h.includes("평단") || h.includes("평균") || h.includes("Avg"));
+      const idxCurrent = headers.findIndex(h => h.includes("현재") || h.includes("Price") || h.includes("Current"));
 
-        // 🔍 경원님 시트 열 매핑 (정밀 수정)
-        // 0:종목명, 1:티커, 2:수량, 3:평단, 4:현재가
+      // 위치를 못 찾았을 경우의 기본값 세팅
+      const finalIdx = {
+        name: idxName !== -1 ? idxName : 0,
+        code: idxCode !== -1 ? idxCode : 1,
+        qty: idxQty !== -1 ? idxQty : 3,
+        avg: idxAvg !== -1 ? idxAvg : 4,
+        current: idxCurrent !== -1 ? idxCurrent : 5
+      };
+
+      const parsed: Stock[] = rows.slice(1).map(row => {
+        const c = row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(v => v.replace(/"/g, '').trim());
         return {
-          name: c[0] || "알 수 없음",
-          code: c[1] || "",
-          qty: cleanNum(c[2]),     // 수량
-          avg: cleanNum(c[3]),     // 평단
-          current: cleanNum(c[4])  // 현재가
+          name: c[finalIdx.name] || "Unknown",
+          code: c[finalIdx.code] || "",
+          qty: cleanNum(c[finalIdx.qty]),
+          avg: cleanNum(c[finalIdx.avg]),
+          current: cleanNum(c[finalIdx.current])
         };
       }).filter(s => s.qty > 0);
+
+      if (parsed.length === 0) {
+        setErrorMsg("보유 수량이 0인 데이터만 있거나, 열 위치를 찾지 못했습니다.");
+      } else {
+        setErrorMsg("");
+      }
 
       setStocks(parsed);
       setLoading(false);
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (e) {
-      console.error("데이터 로드 실패", e);
+      setErrorMsg("구글 시트 연결 실패");
+      console.error(e);
     }
   };
 
   useEffect(() => {
     fetchData();
-    const timer = setInterval(fetchData, 60000);
-    return () => clearInterval(timer);
+    const interval = setInterval(fetchData, 60000);
+    return () => clearInterval(interval);
   }, []);
 
   if (loading) return (
-    <div className="min-h-screen bg-[#0c0e12] flex items-center justify-center text-white font-sans font-bold">
-      데이터 동기화 중...
+    <div className="min-h-screen bg-[#0c0e12] flex items-center justify-center text-white font-black animate-pulse">
+      {errorMsg || "ASSET SYNCING..."}
     </div>
   );
 
-  // 총 합계 계산
   const totalVal = stocks.reduce((acc, s) => acc + (s.current * s.qty), 0);
   const totalBuy = stocks.reduce((acc, s) => acc + (s.avg * s.qty), 0);
   const totalProfit = totalVal - totalBuy;
   const yieldRate = totalBuy > 0 ? ((totalProfit / totalBuy) * 100).toFixed(2) : "0.00";
 
   return (
-    <div className="min-h-screen bg-[#0c0e12] text-slate-200 p-6 md:p-12 font-sans selection:bg-blue-500/30">
+    <div className="min-h-screen bg-[#0c0e12] text-slate-200 p-6 md:p-12 font-sans">
       <div className="max-w-4xl mx-auto">
         
-        {/* 상단 헤더 */}
-        <div className="flex justify-between items-end mb-10">
+        <header className="flex justify-between items-end mb-10">
           <div>
             <h1 className="text-3xl font-black text-white italic tracking-tighter uppercase leading-none">SEOKYEONGWON ASSETS</h1>
-            <p className="text-slate-500 text-xs mt-2 font-bold tracking-widest uppercase opacity-80">LG MDI Accounting Dept · Portfolio</p>
+            <p className="text-slate-500 text-[10px] mt-2 font-bold tracking-widest uppercase opacity-70">LG MDI Accounting Dept</p>
           </div>
-          <div className="text-[10px] text-sky-400 bg-slate-900 px-3 py-1.5 rounded-full border border-slate-800 font-mono font-bold shadow-lg">
+          <div className="text-[10px] text-sky-400 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-full font-mono font-bold">
             LIVE: {lastUpdated}
           </div>
-        </div>
+        </header>
 
-        {/* 메인 총 자산 카드 */}
-        <div className="bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-900 p-10 rounded-[48px] shadow-2xl mb-10 relative overflow-hidden border border-white/10 group">
+        {errorMsg && (
+          <div className="bg-red-900/20 border border-red-500/50 p-4 rounded-2xl mb-8 text-red-400 text-sm font-bold text-center">
+            ⚠️ {errorMsg} (구글 시트의 첫 줄 제목을 확인해 주세요)
+          </div>
+        )}
+
+        {/* Total Stats Card */}
+        <div className="bg-gradient-to-br from-blue-600 via-indigo-700 to-indigo-900 p-10 rounded-[48px] shadow-2xl mb-10 relative overflow-hidden group border border-white/5">
           <div className="relative z-10">
-            <p className="text-blue-100/70 text-xs font-black mb-3 uppercase tracking-[0.2em]">Total Asset Valuation</p>
+            <p className="text-blue-100/60 text-[10px] font-black mb-3 uppercase tracking-[0.2em]">Asset Valuation</p>
             <h2 className="text-6xl font-black text-white mb-10 tracking-tighter">
-              {Math.round(totalVal).toLocaleString()} <span className="text-2xl font-light opacity-60 ml-1">원</span>
+              {Math.round(totalVal).toLocaleString()} <span className="text-2xl font-light opacity-60 ml-1 font-sans">원</span>
             </h2>
             <div className="grid grid-cols-2 gap-10 border-t border-white/10 pt-8">
               <div>
-                <p className="text-blue-100/50 text-[10px] font-black uppercase mb-2 tracking-widest">평가 손익</p>
+                <p className="text-blue-100/40 text-[10px] font-black uppercase mb-2 tracking-widest">평가 손익</p>
                 <p className="text-3xl font-black text-white leading-none">
                   {totalProfit >= 0 ? '+' : ''}{Math.round(totalProfit).toLocaleString()}
                 </p>
               </div>
               <div>
-                <p className="text-blue-100/50 text-[10px] font-black uppercase mb-2 tracking-widest">수익률</p>
+                <p className="text-blue-100/40 text-[10px] font-black uppercase mb-2 tracking-widest">수익률</p>
                 <p className="text-3xl font-black text-white leading-none">{yieldRate}%</p>
               </div>
             </div>
           </div>
-          <div className="absolute right-[-30px] bottom-[-30px] text-white/5 text-[15rem] font-black italic select-none pointer-events-none group-hover:scale-110 transition-transform duration-1000">KRW</div>
+          <div className="absolute right-[-20px] bottom-[-40px] text-white/5 text-[14rem] font-black italic select-none pointer-events-none group-hover:scale-110 transition-transform duration-1000">KRW</div>
         </div>
 
-        {/* 종목별 리스트 */}
+        {/* Asset Table */}
         <div className="bg-[#161a22] rounded-[48px] border border-slate-800 overflow-hidden shadow-2xl">
-          <div className="px-10 py-8 border-b border-slate-800 bg-slate-900/40 flex justify-between items-center">
-            <h3 className="font-black text-white text-lg tracking-tight">보유 종목 현황 ({stocks.length})</h3>
+          <div className="px-10 py-8 border-b border-slate-800 font-black text-white flex justify-between items-center bg-slate-900/40">
+            <span>Portfolio Holdings ({stocks.length})</span>
             <div className="flex items-center gap-2">
-              <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
-              <span className="text-[10px] text-emerald-400 font-black tracking-widest uppercase">Market Active</span>
+              <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></div>
+              <span className="text-[10px] text-emerald-400 font-black tracking-widest uppercase">Connected</span>
             </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left">
               <thead>
-                <tr className="text-slate-600 text-[10px] uppercase font-black tracking-[0.2em] border-b border-slate-800 bg-slate-900/20">
-                  <th className="px-10 py-5">Asset</th>
-                  <th className="px-10 py-5 text-center">Qty / Price</th>
-                  <th className="px-10 py-5 text-right">Yield</th>
+                <tr className="text-slate-600 text-[10px] uppercase font-black tracking-widest border-b border-slate-800 bg-slate-900/20">
+                  <th className="px-10 py-5">Stock</th>
+                  <th className="px-10 py-5 text-center">Qty / Avg</th>
+                  <th className="px-10 py-5 text-right">Profit / Yield</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/50 font-sans">
+              <tbody className="divide-y divide-slate-800/50">
                 {stocks.sort((a,b) => (b.current*b.qty)-(a.current*a.qty)).map((s, i) => {
                   const sYield = ((s.current - s.avg) / s.avg * 100).toFixed(2);
                   const sProfit = (s.current - s.avg) * s.qty;
                   const isUp = parseFloat(sYield) >= 0;
-                  
                   return (
-                    <tr key={i} className="hover:bg-white/[0.03] transition-colors group">
+                    <tr key={i} className="hover:bg-white/[0.03] transition-all group">
                       <td className="px-10 py-7">
-                        <div className="font-black text-white group-hover:text-blue-400 transition-colors text-base tracking-tight mb-1">{s.name}</div>
+                        <div className="font-black text-white group-hover:text-blue-400 transition-colors text-base mb-1">{s.name}</div>
                         <div className="text-[10px] text-slate-600 font-mono font-bold tracking-widest uppercase">{s.code}</div>
                       </td>
                       <td className="px-10 py-7 text-center">
                         <div className="text-sm font-black text-slate-300 mb-1">{s.qty.toLocaleString()} <span className="text-[10px] opacity-30 font-normal">주</span></div>
-                        <div className="text-[10px] text-slate-600 font-bold uppercase">평단: {Math.round(s.avg).toLocaleString()}</div>
+                        <div className="text-[9px] text-slate-600 font-black uppercase tracking-tighter">AVG: {Math.round(s.avg).toLocaleString()}</div>
                       </td>
                       <td className={`px-10 py-7 text-right font-black ${isUp ? 'text-rose-500' : 'text-blue-500'}`}>
-                        <div className="text-xl tracking-tighter leading-none mb-2">{isUp ? '▲' : '▼'} {sYield}%</div>
+                        <div className="text-xl tracking-tighter leading-none mb-2 font-sans">{isUp ? '▲' : '▼'} {sYield}%</div>
                         <div className="text-[10px] opacity-70 font-bold tracking-tight">{isUp ? '+' : ''}{Math.round(sProfit).toLocaleString()} 원</div>
                       </td>
                     </tr>
@@ -156,9 +182,6 @@ export default function SeokyeongwonDashboard() {
             </table>
           </div>
         </div>
-        <footer className="mt-20 pb-12 text-center opacity-30">
-            <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.5em]">Systemized by Gemini · LG MDI Accounting Dept</p>
-        </footer>
       </div>
     </div>
   );
