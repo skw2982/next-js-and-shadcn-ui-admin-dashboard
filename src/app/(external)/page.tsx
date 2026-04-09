@@ -29,9 +29,12 @@ export default function AssetMasterFinalV2() {
   const [debts, setDebts] = useState<Debt[]>([{ id: 1, name: '마이너스 통장', value: 40000000 }]);
   const [savings, setSavings] = useState<Saving[]>([{ id: 1, name: "청년도약계좌", monthly: 700000, current: 8400000, maturityDate: '2028-06-25', transferDay: 25, interestRate: 6.0 }]);
 
+  // --- 강력한 숫자 세척 함수 (소수점 보존) ---
   const cleanNum = (val: any) => {
     if (!val) return 0;
-    const n = parseFloat(val.toString().replace(/[^0-9.-]+/g, ''));
+    // 숫자, 마이너스 부호, 소수점만 남기고 제거
+    const cleaned = val.toString().replace(/[^0-9.-]+/g, '');
+    const n = parseFloat(cleaned);
     return isNaN(n) ? 0 : n;
   };
   const formatComma = (num: number) => Math.round(num).toLocaleString();
@@ -50,7 +53,6 @@ export default function AssetMasterFinalV2() {
       const sText = await sRes.text();
       const sRows = sText.split('\n').map(r => r.trim()).filter(r => r);
       if (sRows.length >= 2) {
-        // A:구분(0), B:계좌(1), C:종목명(2), F:평단(5), G:현재가(6), H:수량(7)
         setStocks(sRows.slice(1).map(row => {
           const c = row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(v => v.replace(/"/g, '').trim());
           return {
@@ -88,6 +90,7 @@ export default function AssetMasterFinalV2() {
   const getStockSummary = () => {
     let domVal = 0, domInv = 0, osVal = 0, osInv = 0;
     stocks.forEach(s => {
+      // '해외' 글자가 포함되어 있는지 유연하게 판별
       const isOS = s.market.includes('해외');
       const rate = isOS ? exchangeRate : 1;
       if (isOS) {
@@ -108,7 +111,8 @@ export default function AssetMasterFinalV2() {
 
   const summ = getStockSummary();
   const totalStockVal = summ.dom.val + summ.os.val;
-  const netWorth = totalStockVal + assets.reduce((a, b) => a + b.value, 0) + savings.reduce((a, b) => a + b.current, 0) - debts.reduce((a, b) => a + b.value, 0);
+  const totalAssetsValue = totalStockVal + assets.reduce((a, b) => a + b.value, 0) + savings.reduce((a, b) => a + b.current, 0);
+  const netWorth = totalAssetsValue - debts.reduce((a, b) => a + b.value, 0);
 
   const calculateProjectedSavings = () => {
     const target = new Date(targetDate);
@@ -145,7 +149,7 @@ export default function AssetMasterFinalV2() {
       return acc;
     }, {});
 
-  if (!isClient || loading) return <div className="min-h-screen bg-[#0c0e12] flex items-center justify-center text-white font-black text-2xl animate-pulse">FIXING EXCHANGE RATES...</div>;
+  if (!isClient || loading) return <div className="min-h-screen bg-[#0c0e12] flex items-center justify-center text-white font-black text-2xl animate-pulse">RECALCULATING FOREIGN ASSETS...</div>;
 
   return (
     <div className="min-h-screen bg-[#0c0e12] text-slate-200 p-4 md:p-8 font-sans selection:bg-blue-500/30">
@@ -199,7 +203,7 @@ export default function AssetMasterFinalV2() {
 
         {activeTab === 'stocks' && (
           <div className="space-y-8 animate-in fade-in duration-500">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="bg-blue-900/10 p-6 rounded-[30px] border border-blue-900/30">
                 <div className="flex justify-between mb-2"><span className="text-[10px] font-black text-blue-400 uppercase tracking-widest">국내 주식</span><span className={`font-black ${summ.dom.y >= 0 ? 'text-rose-500' : 'text-blue-500'}`}>{summ.dom.y.toFixed(2)}%</span></div>
                 <p className="text-2xl font-black text-white">{formatComma(summ.dom.val)}</p>
@@ -257,14 +261,14 @@ export default function AssetMasterFinalV2() {
           </div>
         )}
 
-        {/* --- 실물/부채 탭 (기존과 동일) --- */}
+        {/* --- 실물/부채 탭 --- */}
         {activeTab === 'realestate' && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in duration-500">
             <div className="bg-slate-900 p-8 rounded-[40px] border border-slate-800">
               <div className="flex justify-between items-center mb-6"><h3 className="text-xl font-black text-white italic">Real Assets</h3><button onClick={() => setAssets([...assets, { id: Date.now(), name: '', value: 0 }])} className="bg-blue-600 px-3 py-1 rounded-full text-[10px] font-bold">+ 추가</button></div>
               <div className="space-y-4">
                 {assets.map(a => (
-                  <div key={a.id} className="flex gap-4 items-center bg-slate-950 p-4 rounded-2xl border border-slate-800 focus-within:border-blue-500/50 transition-all">
+                  <div key={a.id} className="flex gap-4 items-center bg-slate-950 p-4 rounded-2xl border border-slate-800 transition-all">
                     <input type="text" value={a.name} onChange={e => setAssets(assets.map(as => as.id === a.id ? {...as, name: e.target.value} : as))} className="w-1/3 bg-transparent font-bold border-b border-slate-700 outline-none" placeholder="자산명" />
                     <input type="text" value={a.value.toLocaleString()} onChange={e => setAssets(assets.map(as => as.id === a.id ? {...as, value: cleanNum(e.target.value)} : as))} className="w-1/2 bg-transparent text-right font-bold border-b border-slate-700 outline-none text-blue-400" placeholder="금액" />
                     <button onClick={() => setAssets(assets.filter(as => as.id !== a.id))} className="text-slate-600 hover:text-red-500">×</button>
@@ -276,7 +280,7 @@ export default function AssetMasterFinalV2() {
               <div className="flex justify-between items-center mb-6"><h3 className="text-xl font-black text-rose-400 italic">Liabilities</h3><button onClick={() => setDebts([...debts, { id: Date.now(), name: '', value: 0 }])} className="bg-rose-600 px-3 py-1 rounded-full text-[10px] font-bold">+ 추가</button></div>
               <div className="space-y-4">
                 {debts.map(d => (
-                  <div key={d.id} className="flex gap-4 items-center bg-slate-950 p-4 rounded-2xl border border-rose-900/20 focus-within:border-rose-500/50 transition-all">
+                  <div key={d.id} className="flex gap-4 items-center bg-slate-950 p-4 rounded-2xl border border-rose-900/20 transition-all">
                     <input type="text" value={d.name} onChange={e => setDebts(debts.map(ds => ds.id === d.id ? {...ds, name: e.target.value} : ds))} className="w-1/3 bg-transparent font-bold border-b border-slate-700 outline-none" placeholder="부채명" />
                     <input type="text" value={d.value.toLocaleString()} onChange={e => setDebts(debts.map(ds => ds.id === d.id ? {...ds, value: cleanNum(e.target.value)} : ds))} className="w-1/2 bg-transparent text-right font-bold border-b border-slate-700 outline-none text-rose-400" placeholder="금액" />
                     <button onClick={() => setDebts(debts.filter(ds => ds.id !== d.id))} className="text-slate-600 hover:text-red-500">×</button>
@@ -287,10 +291,10 @@ export default function AssetMasterFinalV2() {
           </div>
         )}
 
-        {/* --- 예적금 탭 (기존과 동일) --- */}
+        {/* --- 예적금 탭 --- */}
         {activeTab === 'savings' && (
           <div className="bg-slate-900 rounded-[40px] border border-slate-800 p-8 animate-in fade-in duration-500 space-y-6">
-            <div className="flex justify-between items-center mb-6"><h3 className="text-xl font-black text-white italic">Savings Simulator</h3><button onClick={() => setSavings([...savings, { id: Date.now(), name: '', monthly: 0, current: 0, maturityDate: '', transferDay: 1, interestRate: 0 }])} className="bg-emerald-600 px-4 py-2 rounded-full text-[10px] font-bold">+ 추가</button></div>
+            <div className="flex justify-between items-center mb-6"><h3 className="text-xl font-black text-white italic tracking-tight">Savings Simulator</h3><button onClick={() => setSavings([...savings, { id: Date.now(), name: '', monthly: 0, current: 0, maturityDate: '', transferDay: 1, interestRate: 0 }])} className="bg-emerald-600 px-4 py-2 rounded-full text-[10px] font-bold">+ 추가</button></div>
             {savings.map(s => {
               const maturity = new Date(s.maturityDate || new Date());
               const now = new Date();
@@ -305,12 +309,12 @@ export default function AssetMasterFinalV2() {
                     <div className="col-span-2 md:col-span-4 mb-2"><input type="text" value={s.name} onChange={e => setSavings(savings.map(sv => sv.id === s.id ? {...sv, name: e.target.value} : sv))} className="w-full bg-transparent text-white font-black border-b border-slate-700 outline-none text-lg" placeholder="상품명" /></div>
                     <div><p className="text-[10px] text-slate-500 mb-1 font-bold uppercase tracking-widest">월 납입액</p><input type="text" value={s.monthly.toLocaleString()} onChange={e => setSavings(savings.map(sv => sv.id === s.id ? {...sv, monthly: cleanNum(e.target.value)} : sv))} className="w-full bg-slate-900 text-white p-2 rounded-lg text-sm border border-slate-700 focus:border-emerald-500 outline-none" /></div>
                     <div><p className="text-[10px] text-slate-500 mb-1 font-bold uppercase tracking-widest">현재 잔액</p><input type="text" value={s.current.toLocaleString()} onChange={e => setSavings(savings.map(sv => sv.id === s.id ? {...sv, current: cleanNum(e.target.value)} : sv))} className="w-full bg-slate-900 text-white p-2 rounded-lg text-sm border border-slate-700 focus:border-emerald-500 outline-none" /></div>
-                    <div><p className="text-[10px] text-slate-500 mb-1 font-bold uppercase tracking-widest">납입일 / 이율(%)</p><div className="flex gap-1"><input type="number" value={s.transferDay} onChange={e => setSavings(savings.map(sv => sv.id === s.id ? {...sv, transferDay: Number(e.target.value)} : sv))} className="w-1/2 bg-slate-900 text-white p-2 rounded-lg text-xs border border-slate-700 text-center" /><input type="number" step="0.1" value={s.interestRate} onChange={e => setSavings(savings.map(sv => sv.id === s.id ? {...sv, interestRate: Number(e.target.value)} : sv))} className="w-1/2 bg-slate-900 text-white p-2 rounded-lg text-xs border border-slate-700 text-center" /></div></div>
+                    <div><p className="text-[10px] text-slate-500 mb-1 font-bold uppercase tracking-widest">납입일 / 이율(%)</p><div className="flex gap-1"><input type="number" value={s.transferDay} onChange={e => setSavings(savings.map(sv => sv.id === s.id ? {...sv, transferDay: cleanNum(e.target.value)} : sv))} className="w-1/2 bg-slate-900 text-white p-2 rounded-lg text-xs border border-slate-700 text-center" /><input type="number" step="0.1" value={s.interestRate} onChange={e => setSavings(savings.map(sv => sv.id === s.id ? {...sv, interestRate: cleanNum(e.target.value)} : sv))} className="w-1/2 bg-slate-900 text-white p-2 rounded-lg text-xs border border-slate-700 text-center" /></div></div>
                     <div><p className="text-[10px] text-slate-500 mb-1 font-bold uppercase tracking-widest">만기일</p><input type="date" value={s.maturityDate} onChange={e => setSavings(savings.map(sv => sv.id === s.id ? {...sv, maturityDate: e.target.value} : sv))} className="bg-slate-900 text-white p-2 rounded-lg text-[10px] border border-slate-700 w-full" /></div>
                   </div>
                   <div className="w-full xl:w-1/3 bg-emerald-900/10 p-6 rounded-2xl border border-emerald-900/30 text-right flex flex-col justify-center">
                     <p className="text-[10px] text-emerald-400 mb-1 font-black uppercase tracking-widest">만기 예상액</p>
-                    <p className="text-3xl font-black text-white leading-none">{formatComma(fVal)}<span className="text-sm ml-1 font-light opacity-50">원</span></p>
+                    <p className="text-3xl font-black text-white leading-none">{formatComma(fVal)}<span className="text-sm ml-1 opacity-50 font-light">원</span></p>
                   </div>
                 </div>
               );
@@ -318,50 +322,21 @@ export default function AssetMasterFinalV2() {
           </div>
         )}
 
-        {/* --- 실현손익 탭 (기존과 동일) --- */}
+        {/* --- 실현손익 탭 --- */}
         {activeTab === 'realized' && (
           <div className="space-y-6 animate-in fade-in duration-500">
-            <div className="bg-gradient-to-r from-emerald-900/40 to-teal-900/40 p-10 rounded-[40px] border border-emerald-500/20 text-center shadow-xl">
-              <p className="text-emerald-400/80 text-[10px] font-black uppercase tracking-[0.2em] mb-3 opacity-70">Total Realized Profit</p>
-              <h2 className={`text-6xl font-black tracking-tighter ${realized.reduce((a,r)=>a+r.profit,0) >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
-                {realized.reduce((a,r)=>a+r.profit,0) >= 0 ? '+' : ''}{formatComma(realized.reduce((a,r)=>a+r.profit,0))} <span className="text-xl font-light opacity-60 text-white">원</span>
-              </h2>
-            </div>
-            <div className="bg-[#161a22] rounded-[40px] border border-slate-800 overflow-hidden shadow-2xl">
-              <div className="px-8 py-6 border-b border-slate-800 bg-slate-900/40 flex justify-between items-center">
-                <span className="font-black text-white tracking-widest uppercase text-sm">Monthly Settlement</span>
-                <button onClick={() => setRealizedSortOrder(prev => prev === 'desc' ? 'asc' : 'desc')} className="text-[10px] bg-slate-800 text-slate-300 font-bold px-4 py-2 rounded-full hover:bg-slate-700 transition-all uppercase tracking-widest">
-                  {realizedSortOrder === 'desc' ? '▼ Latest First' : '▲ Oldest First'}
-                </button>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="text-slate-500 text-[10px] uppercase font-black tracking-widest border-b border-slate-800 bg-slate-900/20">
-                      <th className="px-8 py-4">매도일 / 종목</th>
-                      <th className="px-8 py-4 text-center">수량</th>
-                      <th className="px-8 py-4 text-right">손익 / 수익률</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.keys(realizedGrouped).map(m => (
-                      <React.Fragment key={m}>
-                        {realizedGrouped[m].items.map((r:any, i:number) => (
-                          <tr key={`${m}-${i}`} className="border-b border-slate-800/50 hover:bg-white/[0.02] transition-colors">
-                            <td className="px-8 py-5"><div className="text-[10px] text-slate-500 font-mono mb-1">{r.date}</div><div className="font-bold text-white text-sm">{r.name}</div></td>
-                            <td className="px-8 py-5 text-center font-bold text-slate-400 text-sm">{r.qty.toLocaleString()}</td>
-                            <td className={`px-8 py-5 text-right font-black ${r.profit >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}><div>{r.profit >= 0 ? '+' : ''}{formatComma(r.profit)}</div><div className="text-[10px] opacity-70">{r.yieldRate}%</div></td>
-                          </tr>
-                        ))}
-                        <tr className="bg-slate-900/80 border-b border-slate-800">
-                          <td colSpan={3} className="px-8 py-3 flex justify-between items-center"><span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{m} Monthly Subtotal</span><span className={`text-sm font-black ${realizedGrouped[m].sub >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>{realizedGrouped[m].sub >= 0 ? '+' : ''}{formatComma(realizedGrouped[m].sub)} 원</span></td>
-                        </tr>
-                      </React.Fragment>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+             {Object.keys(realizedGrouped).map(m => (
+               <div key={m} className="bg-slate-900 rounded-[30px] border border-slate-800 overflow-hidden shadow-xl">
+                 <div className="px-8 py-5 bg-slate-800/40 flex justify-between items-center border-b border-slate-800"><span className="font-black text-slate-300 tracking-widest">{m} 결산 소계</span><span className={`font-black text-lg ${realizedGrouped[m].sub >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>{realizedGrouped[m].sub >= 0 ? '+' : ''}{formatComma(realizedGrouped[m].sub)} 원</span></div>
+                 <table className="w-full text-left">
+                   <tbody className="divide-y divide-slate-800">
+                     {realizedGrouped[m].items.map((r:any, i:number) => (
+                       <tr key={i} className="hover:bg-white/[0.02] transition-colors"><td className="px-8 py-4 text-xs text-slate-500 font-mono">{r.date}</td><td className="px-8 py-4 font-bold text-slate-200">{r.name}</td><td className={`px-8 py-4 text-right font-black ${r.profit >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>{r.profit >= 0 ? '+' : ''}{formatComma(r.profit)}원</td></tr>
+                     ))}
+                   </tbody>
+                 </table>
+               </div>
+             ))}
           </div>
         )}
       </div>
