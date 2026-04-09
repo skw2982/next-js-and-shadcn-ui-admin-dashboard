@@ -7,22 +7,20 @@ interface Stock { market: string; name: string; code: string; qty: number; avg: 
 interface Asset { id: number; name: string; value: number; }
 interface Debt { id: number; name: string; value: number; }
 interface Saving { id: number; name: string; monthly: number; current: number; monthsLeft: number; }
-interface Realized { date: string; name: string; qty: number; profit: number; yieldRate: number; }
+interface Realized { date: string; name: string; qty: number; profit: number; yieldRate: number; note: string; }
 
 export default function MasterAssetDashboard() {
   const [activeTab, setActiveTab] = useState('overview');
   const [isClient, setIsClient] = useState(false);
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc'); 
 
+  // 실시간 환율 상태
   const [exchangeRate, setExchangeRate] = useState(1350); 
 
-  // --- 🔗 구글 시트 연동 링크 세팅 ---
-  // 1. 기존 보유 주식 시트 링크
-  const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOtqLayVYNftdkuatjh1_z-8xVj1EgYGRU3L5O_NAPjQDSVGlK/pub?gid=0&single=true&output=csv";
-  
-  // 2. [여기를 수정하세요!] 방금 새로 만든 '실현수익' 시트 CSV 링크를 따옴표 안에 넣으세요.
-  const REALIZED_CSV_URL = "여기에_실현수익_CSV_링크를_붙여넣으세요"; 
-https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOtqLayVYNftdkuatjh1_z-8xVj1EgYGRU3L5O_NAPjQDSVGlK/pub?gid=817751922&single=true&output=csv
+  // --- 🔗 구글 시트 연동 링크 ---
+  const STOCK_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOtqLayVYNftdkuatjh1_z-8xVj1EgYGRU3L5O_NAPjQDSVGlK/pub?gid=0&single=true&output=csv";
+  const REALIZED_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOtqLayVYNftdkuatjh1_z-8xVj1EgYGRU3L5O_NAPjQDSVGlK/pub?gid=817751922&single=true&output=csv";
+
   // --- 상태 관리 ---
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [realized, setRealized] = useState<Realized[]>([]);
@@ -41,6 +39,7 @@ https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOt
     { id: 2, name: "주택청약", monthly: 100000, current: 3500000, monthsLeft: 120 }
   ]);
 
+  // 로컬 스토리지 데이터 로드
   useEffect(() => {
     setIsClient(true);
     const savedAssets = localStorage.getItem('myAssets');
@@ -51,6 +50,7 @@ https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOt
     if (savedSavings) setSavings(JSON.parse(savedSavings));
   }, []);
 
+  // 로컬 스토리지 데이터 저장
   useEffect(() => {
     if (isClient) {
       localStorage.setItem('myAssets', JSON.stringify(assets));
@@ -61,7 +61,7 @@ https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOt
 
   const cleanNum = (val: string) => {
     if (!val) return 0;
-    return parseFloat(val.replace(/[,"'원\s]/g, '')) || 0;
+    return parseFloat(val.replace(/[,"'원\s%]/g, '')) || 0;
   };
 
   const fetchExchangeRate = async () => {
@@ -74,15 +74,15 @@ https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOt
 
   const fetchGoogleSheets = async () => {
     try {
-      // 1. 보유 주식 가져오기
-      const resStocks = await fetch(`${SHEET_CSV_URL}&t=${new Date().getTime()}`);
+      // 1. 보유 주식 데이터 파싱
+      const resStocks = await fetch(`${STOCK_CSV_URL}&t=${new Date().getTime()}`);
       const textStocks = await resStocks.text();
       const rowsS = textStocks.split('\n').map(r => r.trim()).filter(r => r);
       if (rowsS.length >= 2) {
         const headers = rowsS[0].split(',').map(h => h.replace(/"/g, '').trim());
         const idx = {
-          market: headers.findIndex(h => h.includes("구분") || h.includes("시장")),
-          name: headers.findIndex(h => h.includes("종목") || h.includes("이름")),
+          market: headers.findIndex(h => h.includes("구분")),
+          name: headers.findIndex(h => h.includes("종목")),
           code: headers.findIndex(h => h.includes("티커")),
           qty: headers.findIndex(h => h.includes("수량")),
           avg: headers.findIndex(h => h.includes("평단")),
@@ -102,25 +102,23 @@ https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOt
         setStocks(parsedStocks);
       }
 
-      // 2. 실현 손익 가져오기 (링크가 입력되어 있을 때만 실행)
-      if (REALIZED_CSV_URL.includes("docs.google.com")) {
-        const resReal = await fetch(`${REALIZED_CSV_URL}&t=${new Date().getTime()}`);
-        const textReal = await resReal.text();
-        const rowsR = textReal.split('\n').map(r => r.trim()).filter(r => r);
-        if (rowsR.length >= 2) {
-          const parsedReal = rowsR.slice(1).map(row => {
-            const c = row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(v => v.replace(/"/g, '').trim());
-            return {
-              date: c[0] || "",
-              name: c[1] || "",
-              qty: cleanNum(c[2]),
-              profit: cleanNum(c[3]),
-              yieldRate: cleanNum(c[4])
-            };
-          }).filter(r => r.date);
-          // 최신 날짜가 위로 오게 정렬
-          setRealized(parsedReal.reverse()); 
-        }
+      // 2. 실현 손익 데이터 파싱
+      const resReal = await fetch(`${REALIZED_CSV_URL}&t=${new Date().getTime()}`);
+      const textReal = await resReal.text();
+      const rowsR = textReal.split('\n').map(r => r.trim()).filter(r => r);
+      if (rowsR.length >= 2) {
+        const parsedReal = rowsR.slice(1).map(row => {
+          const c = row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(v => v.replace(/"/g, '').trim());
+          return {
+            date: c[0] || "",
+            name: c[1] || "",
+            qty: cleanNum(c[2]),
+            profit: cleanNum(c[3]),
+            yieldRate: cleanNum(c[4]),
+            note: c[5] || ""
+          };
+        }).filter(r => r.date);
+        setRealized(parsedReal.reverse()); // 최신순 정렬
       }
 
       setLoading(false);
@@ -141,6 +139,7 @@ https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOt
     return () => clearInterval(interval);
   }, []);
 
+  // --- 유틸리티 함수 ---
   const addAsset = () => setAssets([...assets, { id: Date.now(), name: '새 자산', value: 0 }]);
   const removeAsset = (id: number) => setAssets(assets.filter(a => a.id !== id));
   const updateAsset = (id: number, field: string, val: string | number) => setAssets(assets.map(a => a.id === id ? { ...a, [field]: val } : a));
@@ -155,7 +154,7 @@ https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOt
 
   const toggleSortOrder = () => setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc');
 
-  // 주식 평가액 계산
+  // 주식 정렬 및 가치 계산
   const sortedStocks = [...stocks].sort((a, b) => {
     const isUS_A = a.market.includes('해외');
     const isUS_B = b.market.includes('해외');
@@ -173,10 +172,7 @@ https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOt
     return acc + (krwVal * s.qty);
   }, 0);
 
-  // 실현 손익 계산
   const totalRealizedProfit = realized.reduce((acc, r) => acc + r.profit, 0);
-
-  // 전체 자산 계산
   const totalOtherAssets = assets.reduce((acc, a) => acc + a.value, 0);
   const totalSavings = savings.reduce((acc, s) => acc + s.current, 0);
   const totalLiabilities = debts.reduce((acc, d) => acc + d.value, 0);
@@ -186,7 +182,7 @@ https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOt
 
   if (!isClient || loading) return (
     <div className="min-h-screen bg-[#0c0e12] flex items-center justify-center text-white font-black animate-pulse">
-      SYNCING WITH GOOGLE SHEETS...
+      LG MDI FINANCIAL SYSTEM INITIALIZING...
     </div>
   );
 
@@ -206,7 +202,7 @@ https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOt
           </div>
         </header>
 
-        {/* 탭 메뉴 */}
+        {/* 탭 네비게이션 */}
         <div className="flex overflow-x-auto gap-2 mb-8 pb-2 scrollbar-hide">
           {['overview', 'stocks', 'realestate', 'savings', 'realized'].map((tab) => (
             <button 
@@ -268,11 +264,11 @@ https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOt
           </div>
         )}
 
-        {/* --- 2페이지: 주식 상세 (기존과 동일) --- */}
+        {/* --- 2페이지: 보유 주식 (정렬 가능) --- */}
         {activeTab === 'stocks' && (
           <div className="bg-[#161a22] rounded-[40px] border border-slate-800 overflow-hidden shadow-2xl animate-in fade-in duration-500">
             <div className="px-8 py-6 border-b border-slate-800 flex justify-between items-center bg-slate-900/40">
-              <span className="font-black text-white text-sm">보유 종목 (실시간)</span>
+              <span className="font-black text-white text-sm">포트폴리오 현황 (해외주식 환율 적용)</span>
               <span className="text-[10px] text-sky-400 font-mono bg-slate-900 px-3 py-1 rounded-full">{lastUpdated}</span>
             </div>
             <div className="overflow-x-auto">
@@ -324,7 +320,7 @@ https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOt
           </div>
         )}
 
-        {/* --- 3, 4페이지 (기존과 동일하여 생략, Vercel 복사 시 원본 유지 필요) --- */}
+        {/* --- 3페이지: 실물/부채 관리 --- */}
         {activeTab === 'realestate' && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in duration-500">
             <div className="bg-slate-900 p-8 rounded-[40px] border border-slate-800 relative">
@@ -335,9 +331,9 @@ https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOt
               <div className="space-y-4">
                 {assets.map((asset) => (
                   <div key={asset.id} className="bg-[#0c0e12] p-4 rounded-2xl border border-slate-800 flex gap-4 items-center">
-                    <input type="text" value={asset.name} onChange={(e) => updateAsset(asset.id, 'name', e.target.value)} className="w-1/3 bg-transparent text-white text-sm font-bold outline-none border-b border-slate-700 focus:border-blue-500 pb-1" placeholder="자산명" />
-                    <input type="number" value={asset.value} onChange={(e) => updateAsset(asset.id, 'value', Number(e.target.value))} className="w-1/2 bg-transparent text-blue-400 text-right font-bold outline-none border-b border-slate-700 focus:border-blue-500 pb-1" placeholder="금액(원)" />
-                    <button onClick={() => removeAsset(asset.id)} className="text-slate-600 hover:text-red-500 text-xl font-black transition-colors">×</button>
+                    <input type="text" value={asset.name} onChange={(e) => updateAsset(asset.id, 'name', e.target.value)} className="w-1/3 bg-transparent text-white text-sm font-bold outline-none border-b border-slate-700 focus:border-blue-500 pb-1" />
+                    <input type="number" value={asset.value} onChange={(e) => updateAsset(asset.id, 'value', Number(e.target.value))} className="w-1/2 bg-transparent text-blue-400 text-right font-bold outline-none border-b border-slate-700 focus:border-blue-500 pb-1" />
+                    <button onClick={() => removeAsset(asset.id)} className="text-slate-600 hover:text-red-500 text-xl font-black">×</button>
                   </div>
                 ))}
               </div>
@@ -351,9 +347,9 @@ https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOt
               <div className="space-y-4">
                 {debts.map((debt) => (
                   <div key={debt.id} className="bg-[#0c0e12] p-4 rounded-2xl border border-rose-900/30 flex gap-4 items-center">
-                    <input type="text" value={debt.name} onChange={(e) => updateDebt(debt.id, 'name', e.target.value)} className="w-1/3 bg-transparent text-white text-sm font-bold outline-none border-b border-rose-900/50 focus:border-rose-500 pb-1" placeholder="부채명" />
-                    <input type="number" value={debt.value} onChange={(e) => updateDebt(debt.id, 'value', Number(e.target.value))} className="w-1/2 bg-transparent text-rose-400 text-right font-bold outline-none border-b border-rose-900/50 focus:border-rose-500 pb-1" placeholder="금액(원)" />
-                    <button onClick={() => removeDebt(debt.id)} className="text-rose-900 hover:text-red-500 text-xl font-black transition-colors">×</button>
+                    <input type="text" value={debt.name} onChange={(e) => updateDebt(debt.id, 'name', e.target.value)} className="w-1/3 bg-transparent text-white text-sm font-bold outline-none border-b border-rose-900/50 focus:border-rose-500 pb-1" />
+                    <input type="number" value={debt.value} onChange={(e) => updateDebt(debt.id, 'value', Number(e.target.value))} className="w-1/2 bg-transparent text-rose-400 text-right font-bold outline-none border-b border-rose-900/50 focus:border-rose-500 pb-1" />
+                    <button onClick={() => removeDebt(debt.id)} className="text-rose-900 hover:text-red-500 text-xl font-black">×</button>
                   </div>
                 ))}
               </div>
@@ -361,27 +357,28 @@ https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOt
           </div>
         )}
 
+        {/* --- 4페이지: 예적금 관리 --- */}
         {activeTab === 'savings' && (
           <div className="bg-slate-900 rounded-[40px] border border-slate-800 overflow-hidden p-8 animate-in fade-in duration-500">
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-xl font-black text-white">예적금 시뮬레이터</h3>
-              <button onClick={addSaving} className="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-4 py-2 rounded-full transition-colors">+ 예적금 추가</button>
+              <button onClick={addSaving} className="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-4 py-2 rounded-full transition-colors">+ 추가</button>
             </div>
             <div className="space-y-4">
               {savings.map((saving) => {
                 const futureValue = saving.current + (saving.monthly * saving.monthsLeft);
                 return (
                   <div key={saving.id} className="bg-[#0c0e12] p-6 rounded-3xl border border-slate-800 flex flex-col md:flex-row gap-6 relative group">
-                    <button onClick={() => removeSaving(saving.id)} className="absolute top-4 right-4 text-slate-600 hover:text-red-500 text-xl font-black transition-colors">×</button>
+                    <button onClick={() => removeSaving(saving.id)} className="absolute top-4 right-4 text-slate-600 hover:text-red-500 text-xl font-black">×</button>
                     <div className="flex-1 w-full space-y-4 pr-6">
-                      <input type="text" value={saving.name} onChange={(e) => updateSaving(saving.id, 'name', e.target.value)} className="w-full bg-transparent text-white text-lg font-bold outline-none border-b border-slate-700 focus:border-emerald-500 pb-1" placeholder="예적금/펀드 이름" />
+                      <input type="text" value={saving.name} onChange={(e) => updateSaving(saving.id, 'name', e.target.value)} className="w-full bg-transparent text-white text-lg font-bold outline-none border-b border-slate-700 focus:border-emerald-500 pb-1" />
                       <div className="grid grid-cols-2 gap-4">
                         <div>
-                          <p className="text-[10px] text-slate-500 tracking-widest uppercase mb-1">월 납입액 (원)</p>
+                          <p className="text-[10px] text-slate-500 tracking-widest uppercase mb-1">월 납입액</p>
                           <input type="number" value={saving.monthly} onChange={(e) => updateSaving(saving.id, 'monthly', Number(e.target.value))} className="w-full bg-slate-900 text-white p-2 rounded-lg text-sm font-bold border border-slate-700 outline-none" />
                         </div>
                         <div>
-                          <p className="text-[10px] text-slate-500 tracking-widest uppercase mb-1">현재 잔액 (원)</p>
+                          <p className="text-[10px] text-slate-500 tracking-widest uppercase mb-1">현재 잔액</p>
                           <input type="number" value={saving.current} onChange={(e) => updateSaving(saving.id, 'current', Number(e.target.value))} className="w-full bg-slate-900 text-white p-2 rounded-lg text-sm font-bold border border-slate-700 outline-none" />
                         </div>
                       </div>
@@ -389,11 +386,9 @@ https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOt
                     <div className="flex-1 w-full bg-emerald-900/10 p-5 rounded-2xl border border-emerald-900/30 flex justify-between items-center">
                       <div>
                         <div className="flex items-center gap-2 mb-2">
-                          <p className="text-[10px] text-emerald-400 tracking-widest uppercase">남은 기간:</p>
-                          <input type="number" value={saving.monthsLeft} onChange={(e) => updateSaving(saving.id, 'monthsLeft', Number(e.target.value))} className="w-16 bg-slate-900 text-white p-1 rounded text-center text-xs font-bold border border-emerald-900/50 outline-none" />
-                          <span className="text-[10px] text-emerald-400 font-bold">개월</span>
+                          <p className="text-[10px] text-emerald-400 tracking-widest uppercase">남은 {saving.monthsLeft}개월</p>
                         </div>
-                        <p className="text-xs text-slate-400">만기 시 예상 수령액</p>
+                        <p className="text-xs text-slate-400">만기 예상액</p>
                       </div>
                       <div className="text-right">
                         <p className="text-2xl font-black text-white">{futureValue.toLocaleString()}원</p>
@@ -406,63 +401,50 @@ https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOt
           </div>
         )}
 
-        {/* --- 5페이지: 실현수익 (새로 추가됨!) --- */}
+        {/* --- 5페이지: 실현 손익 --- */}
         {activeTab === 'realized' && (
           <div className="space-y-6 animate-in fade-in duration-500">
-            {/* 누적 실현수익 히어로 카드 */}
             <div className="bg-gradient-to-r from-emerald-900/40 to-teal-900/40 p-10 rounded-[40px] border border-emerald-500/20 text-center">
-              <p className="text-emerald-400/80 text-[10px] font-black uppercase tracking-[0.2em] mb-3">누적 실현 수익 (Realized Profit)</p>
+              <p className="text-emerald-400/80 text-[10px] font-black uppercase tracking-[0.2em] mb-3">누적 실현 수익 (Realized)</p>
               <h2 className={`text-6xl font-black tracking-tighter ${totalRealizedProfit >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
                 {totalRealizedProfit >= 0 ? '+' : ''}{Math.round(totalRealizedProfit).toLocaleString()} <span className="text-xl font-light opacity-60 text-white">원</span>
               </h2>
             </div>
 
-            {/* 실현수익 히스토리 리스트 */}
             <div className="bg-[#161a22] rounded-[40px] border border-slate-800 overflow-hidden shadow-2xl">
-              <div className="px-8 py-6 border-b border-slate-800 bg-slate-900/40">
-                <span className="font-black text-white">매매 히스토리 (최신순)</span>
+              <div className="px-8 py-6 border-b border-slate-800 bg-slate-900/40 flex justify-between items-center">
+                <span className="font-black text-white">매매 히스토리</span>
+                <span className="text-[10px] text-emerald-400 font-mono">기초잔액 및 퉁친 계좌 포함</span>
               </div>
-              {realized.length === 0 ? (
-                <div className="p-10 text-center text-slate-500 font-bold text-sm">
-                  CSV 링크를 설정하거나 데이터를 입력해주세요.
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left">
-                    <thead>
-                      <tr className="text-slate-500 text-[10px] uppercase font-black tracking-widest border-b border-slate-800 bg-slate-900/20">
-                        <th className="px-8 py-4">매도일자 / 종목명</th>
-                        <th className="px-8 py-4 text-center">수량</th>
-                        <th className="px-8 py-4 text-right">실현수익금 / 수익률</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800/50">
-                      {realized.map((r, i) => {
-                        const isUp = r.profit >= 0;
-                        return (
-                          <tr key={i} className="hover:bg-white/[0.02] transition-colors">
-                            <td className="px-8 py-5">
-                              <div className="text-[10px] text-slate-500 font-mono mb-1">{r.date}</div>
-                              <div className="font-bold text-white text-sm">{r.name}</div>
-                            </td>
-                            <td className="px-8 py-5 text-center font-bold text-slate-400 text-sm">
-                              {r.qty.toLocaleString()}
-                            </td>
-                            <td className={`px-8 py-5 text-right font-black ${isUp ? 'text-emerald-400' : 'text-rose-500'}`}>
-                              <div className="text-base tracking-tighter mb-1">
-                                {isUp ? '+' : ''}{Math.round(r.profit).toLocaleString()} 원
-                              </div>
-                              <div className="text-[10px] opacity-70">
-                                {r.yieldRate}%
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="text-slate-500 text-[10px] uppercase font-black tracking-widest border-b border-slate-800 bg-slate-900/20">
+                      <th className="px-8 py-4">매도일자 / 종목명</th>
+                      <th className="px-8 py-4 text-center">매도수량</th>
+                      <th className="px-8 py-4 text-right">실현손익금 / 수익률</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/50">
+                    {realized.map((r, i) => {
+                      const isUp = r.profit >= 0;
+                      return (
+                        <tr key={i} className="hover:bg-white/[0.02] transition-colors">
+                          <td className="px-8 py-5">
+                            <div className="text-[10px] text-slate-500 font-mono mb-1">{r.date}</div>
+                            <div className="font-bold text-white text-sm">{r.name}</div>
+                          </td>
+                          <td className="px-8 py-5 text-center font-bold text-slate-400 text-sm">{r.qty.toLocaleString()}</td>
+                          <td className={`px-8 py-5 text-right font-black ${isUp ? 'text-emerald-400' : 'text-rose-500'}`}>
+                            <div className="text-base tracking-tighter mb-1">{isUp ? '+' : ''}{Math.round(r.profit).toLocaleString()} 원</div>
+                            <div className="text-[10px] opacity-70">{r.yieldRate}%</div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
