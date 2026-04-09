@@ -2,8 +2,18 @@
 
 import React, { useState, useEffect } from 'react';
 
+// 1. 바구니(Stock)에 들어갈 데이터의 형식을 미리 정의합니다.
+interface Stock {
+  name: string;
+  code: string;
+  qty: number;
+  avg: number;
+  current: number;
+}
+
 export default function SeokyeongwonLiveDashboard() {
-  const [stocks, setStocks] = useState([]);
+  // 2. useState<Stock[]>([]) 라고 써서 "이 바구니엔 Stock 데이터만 들어올 거야"라고 선언합니다.
+  const [stocks, setStocks] = useState<Stock[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState("");
 
@@ -16,11 +26,11 @@ export default function SeokyeongwonLiveDashboard() {
       const rows = csvText.split('\n').map(row => row.trim()).filter(row => row);
       const dataRows = rows.slice(1);
 
-      const parsed = dataRows.map(row => {
+      const parsed: Stock[] = dataRows.map(row => {
         const columns = row.split(',').map(col => col.replace(/"/g, '').trim());
         return {
-          name: columns[0],
-          code: columns[1],
+          name: columns[0] || "",
+          code: columns[1] || "",
           qty: parseFloat(columns[3]) || 0,
           avg: parseFloat(columns[4]) || 0,
           current: parseFloat(columns[5]) || 0
@@ -43,10 +53,7 @@ export default function SeokyeongwonLiveDashboard() {
 
   if (loading) return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white font-bold">
-      <div className="text-center">
-        <div className="mb-4 text-4xl animate-bounce">📈</div>
-        <p className="text-xl tracking-widest">CONNECTING TO ASSETS...</p>
-      </div>
+      <p className="text-xl tracking-widest">CONNECTING TO ASSETS...</p>
     </div>
   );
 
@@ -97,7 +104,7 @@ export default function SeokyeongwonLiveDashboard() {
         <div className="bg-[#161a22] rounded-[40px] border border-slate-800 overflow-hidden shadow-xl">
           <div className="px-8 py-6 border-b border-slate-800 font-bold text-white flex justify-between items-center">
             <span>HOLDINGS ({stocks.length})</span>
-            <span className="text-[10px] text-emerald-400 animate-pulse uppercase">● Market Live</span>
+            <span className="text-[10px] text-emerald-400 animate-pulse uppercase tracking-widest">● Market Live</span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left">
