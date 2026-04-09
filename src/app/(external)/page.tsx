@@ -17,7 +17,6 @@ export default function AssetMasterFinalV2() {
   const [targetDate, setTargetDate] = useState('2026-12-31');
   const [exchangeRate, setExchangeRate] = useState(1350);
 
-  // --- 🔗 구글 시트 CSV 링크 (경원님 시트) ---
   const STOCK_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOtqLayVYNftdkuatjh1_z-8xVj1EgYGRU3L5O_NAPjQDSVGlK/pub?gid=0&single=true&output=csv";
   const REALIZED_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOtqLayVYNftdkuatjh1_z-8xVj1EgYGRU3L5O_NAPjQDSVGlK/pub?gid=817751922&single=true&output=csv";
 
@@ -30,13 +29,11 @@ export default function AssetMasterFinalV2() {
   const [debts, setDebts] = useState<Debt[]>([{ id: 1, name: '마이너스 통장', value: 40000000 }]);
   const [savings, setSavings] = useState<Saving[]>([{ id: 1, name: "청년도약계좌", monthly: 700000, current: 8400000, maturityDate: '2028-06-25', transferDay: 25, interestRate: 6.0 }]);
 
-  // --- 강력한 숫자 세척 함수 ---
   const cleanNum = (val: any) => {
     if (!val) return 0;
     const n = parseFloat(val.toString().replace(/[^0-9.-]+/g, ''));
     return isNaN(n) ? 0 : n;
   };
-
   const formatComma = (num: number) => Math.round(num).toLocaleString();
 
   const fetchAllData = async () => {
@@ -53,9 +50,8 @@ export default function AssetMasterFinalV2() {
       const sText = await sRes.text();
       const sRows = sText.split('\n').map(r => r.trim()).filter(r => r);
       if (sRows.length >= 2) {
-        const h = sRows[0].split(',').map(v => v.replace(/"/g, '').trim());
-        const idx = { market: h.indexOf("구분"), account: h.indexOf("계좌"), name: h.indexOf("종목명"), qty: h.indexOf("수량"), avg: h.indexOf("평단"), cur: h.indexOf("현재가") };
-        const parsedStocks = sRows.slice(1).map(row => {
+        // A:구분(0), B:계좌(1), C:종목명(2), F:평단(5), G:현재가(6), H:수량(7)
+        setStocks(sRows.slice(1).map(row => {
           const c = row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(v => v.replace(/"/g, '').trim());
           return {
             market: c[0] || "국내",
@@ -65,8 +61,7 @@ export default function AssetMasterFinalV2() {
             current: cleanNum(c[6]),
             qty: cleanNum(c[7])
           };
-        }).filter(s => s.qty > 0);
-        setStocks(parsedStocks);
+        }).filter(s => s.qty > 0));
       }
 
       const rText = await rRes.text();
@@ -80,7 +75,7 @@ export default function AssetMasterFinalV2() {
 
       setLoading(false);
       setLastUpdated(new Date().toLocaleTimeString());
-    } catch (e) { console.error(e); setLoading(false); }
+    } catch (e) { setLoading(false); }
   };
 
   useEffect(() => {
@@ -90,21 +85,21 @@ export default function AssetMasterFinalV2() {
     return () => clearInterval(timer);
   }, []);
 
-  // --- 핵심 계산 로직 ---
   const getStockSummary = () => {
-    let domVal = 0, domProfit = 0, domInv = 0;
-    let osVal = 0, osProfit = 0, osInv = 0;
-
+    let domVal = 0, domInv = 0, osVal = 0, osInv = 0;
     stocks.forEach(s => {
       const isOS = s.market.includes('해외');
       const rate = isOS ? exchangeRate : 1;
-      const curKrw = s.current * rate * s.qty;
-      const invKrw = s.avg * rate * s.qty;
-      
-      if (isOS) { osVal += curKrw; osInv += invKrw; osProfit += (curKrw - invKrw); }
-      else { domVal += curKrw; domInv += invKrw; domProfit += (curKrw - invKrw); }
+      if (isOS) {
+        osVal += s.current * rate * s.qty;
+        osInv += s.avg * rate * s.qty;
+      } else {
+        domVal += s.current * s.qty;
+        domInv += s.avg * s.qty;
+      }
     });
-
+    const domProfit = domVal - domInv;
+    const osProfit = osVal - osInv;
     return { 
       dom: { val: domVal, p: domProfit, y: domInv > 0 ? (domProfit/domInv*100) : 0 },
       os: { val: osVal, p: osProfit, y: osInv > 0 ? (osProfit/osInv*100) : 0 }
@@ -113,10 +108,7 @@ export default function AssetMasterFinalV2() {
 
   const summ = getStockSummary();
   const totalStockVal = summ.dom.val + summ.os.val;
-  const totalOtherAssets = assets.reduce((acc, a) => acc + a.value, 0);
-  const totalSavings = savings.reduce((acc, s) => acc + s.current, 0);
-  const totalLiabilities = debts.reduce((acc, d) => acc + d.value, 0);
-  const netWorth = totalStockVal + totalOtherAssets + totalSavings - totalLiabilities;
+  const netWorth = totalStockVal + assets.reduce((a, b) => a + b.value, 0) + savings.reduce((a, b) => a + b.current, 0) - debts.reduce((a, b) => a + b.value, 0);
 
   const calculateProjectedSavings = () => {
     const target = new Date(targetDate);
@@ -132,31 +124,28 @@ export default function AssetMasterFinalV2() {
     }, 0);
   };
   
-  const projectedSavingsValue = calculateProjectedSavings();
-  const projectedNetWorth = totalStockVal + totalOtherAssets + projectedSavingsValue - totalLiabilities;
+  const projectedNetWorth = totalStockVal + assets.reduce((a, b) => a + b.value, 0) + calculateProjectedSavings() - debts.reduce((a, b) => a + b.value, 0);
 
   const grouped = stocks.reduce((acc: any, s) => {
     if (!acc[s.account]) acc[s.account] = { items: [], total: 0, profit: 0 };
-    const rate = s.market.includes('해외') ? exchangeRate : 1;
+    const isOS = s.market.includes('해외');
+    const rate = isOS ? exchangeRate : 1;
     acc[s.account].items.push(s);
     acc[s.account].total += (s.current * rate * s.qty);
-    acc[s.account].profit += (s.current - s.avg) * rate * s.qty; // 계좌 소계에 환율 반영
+    acc[s.account].profit += (s.current - s.avg) * rate * s.qty;
     return acc;
   }, {});
 
-  const realizedGrouped = [...realized].sort((a, b) => {
-    const dateA = new Date(a.date).getTime() || 0;
-    const dateB = new Date(b.date).getTime() || 0;
-    return realizedSortOrder === 'desc' ? dateB - dateA : dateA - dateB;
-  }).reduce((acc: any, r) => {
-    const m = r.date.substring(0, 7);
-    if (!acc[m]) acc[m] = { items: [], sub: 0 };
-    acc[m].items.push(r);
-    acc[m].sub += r.profit;
-    return acc;
-  }, {});
+  const realizedGrouped = [...realized].sort((a, b) => realizedSortOrder === 'desc' ? new Date(b.date).getTime() - new Date(a.date).getTime() : new Date(a.date).getTime() - new Date(b.date).getTime())
+    .reduce((acc: any, r) => {
+      const m = r.date.substring(0, 7);
+      if (!acc[m]) acc[m] = { items: [], sub: 0 };
+      acc[m].items.push(r);
+      acc[m].sub += r.profit;
+      return acc;
+    }, {});
 
-  if (!isClient || loading) return <div className="min-h-screen bg-[#0c0e12] flex items-center justify-center text-white font-black text-2xl italic animate-pulse">REFINING FINANCIAL DATA...</div>;
+  if (!isClient || loading) return <div className="min-h-screen bg-[#0c0e12] flex items-center justify-center text-white font-black text-2xl animate-pulse">FIXING EXCHANGE RATES...</div>;
 
   return (
     <div className="min-h-screen bg-[#0c0e12] text-slate-200 p-4 md:p-8 font-sans selection:bg-blue-500/30">
@@ -190,15 +179,15 @@ export default function AssetMasterFinalV2() {
             
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="bg-slate-900 p-6 rounded-3xl border border-slate-800"><p className="text-slate-500 text-[10px] font-black uppercase mb-1">주식 평가액</p><p className="text-xl font-bold text-white">{formatComma(totalStockVal)}</p></div>
-              <div className="bg-slate-900 p-6 rounded-3xl border border-slate-800"><p className="text-slate-500 text-[10px] font-black uppercase mb-1">기타 자산</p><p className="text-xl font-bold text-white">{formatComma(totalOtherAssets)}</p></div>
-              <div className="bg-slate-900 p-6 rounded-3xl border border-slate-800"><p className="text-slate-500 text-[10px] font-black uppercase mb-1">예적금 현고</p><p className="text-xl font-bold text-white">{formatComma(totalSavings)}</p></div>
-              <div className="bg-rose-900/20 p-6 rounded-3xl border border-rose-900/50"><p className="text-rose-400/70 text-[10px] font-black uppercase mb-1">부채 총계</p><p className="text-xl font-bold text-rose-400">{formatComma(totalLiabilities)}</p></div>
+              <div className="bg-slate-900 p-6 rounded-3xl border border-slate-800"><p className="text-slate-500 text-[10px] font-black uppercase mb-1">기타 자산</p><p className="text-xl font-bold text-white">{formatComma(assets.reduce((a,b)=>a+b.value,0))}</p></div>
+              <div className="bg-slate-900 p-6 rounded-3xl border border-slate-800"><p className="text-slate-500 text-[10px] font-black uppercase mb-1">예적금 현고</p><p className="text-xl font-bold text-white">{formatComma(savings.reduce((a,b)=>a+b.current,0))}</p></div>
+              <div className="bg-rose-900/20 p-6 rounded-3xl border border-rose-900/50"><p className="text-rose-400/70 text-[10px] font-black uppercase mb-1">부채 총계</p><p className="text-xl font-bold text-rose-400">{formatComma(debts.reduce((a,b)=>a+b.value,0))}</p></div>
             </div>
 
             <div className="bg-emerald-900/10 p-10 rounded-[50px] border border-emerald-900/30">
               <div className="flex justify-between items-center mb-8">
                 <div><h3 className="text-xl font-black text-emerald-400 italic">Future Projection</h3><p className="text-xs text-slate-500 font-bold uppercase tracking-widest mt-1">예적금 이자 포함 미래 가치</p></div>
-                <input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} className="bg-slate-900 text-emerald-400 font-black p-3 rounded-2xl border border-emerald-900/50 outline-none focus:ring-2 ring-emerald-500/50" />
+                <input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} className="bg-slate-900 text-emerald-400 font-black p-3 rounded-2xl border border-emerald-900/50 outline-none" />
               </div>
               <div className="grid md:grid-cols-2 gap-4">
                 <div className="bg-slate-950/50 p-6 rounded-3xl text-center"><p className="text-[10px] text-slate-500 font-black uppercase mb-2">예상 미래 순자산</p><p className="text-3xl font-black text-white">{formatComma(projectedNetWorth)} 원</p></div>
@@ -245,14 +234,14 @@ export default function AssetMasterFinalV2() {
                         const rate = isOS ? exchangeRate : 1;
                         const yR = s.avg > 0 ? ((s.current - s.avg)/s.avg*100).toFixed(2) : "0.00";
                         const isUp = parseFloat(yR) >= 0;
-                        const profKrw = (s.current - s.avg) * rate * s.qty; // 개별 종목 손익 환율 반영
+                        const profKrw = (s.current - s.avg) * rate * s.qty;
                         return (
                           <tr key={i} className="hover:bg-white/[0.02] transition-colors">
                             <td className="px-8 py-5 font-bold text-slate-200">
-                              <span className={`text-[8px] mr-2 px-1.5 py-0.5 rounded-sm uppercase tracking-tighter ${s.market.includes('해외') ? 'bg-amber-900/50 text-amber-500' : 'bg-blue-900/50 text-blue-400'}`}>{s.market.includes('해외') ? 'US' : 'KR'}</span>
+                              <span className={`text-[8px] mr-2 px-1.5 py-0.5 rounded-sm uppercase tracking-tighter ${isOS ? 'bg-amber-900/50 text-amber-500' : 'bg-blue-900/50 text-blue-400'}`}>{isOS ? 'US' : 'KR'}</span>
                               {s.name}
                             </td>
-                            <td className="px-8 py-5 text-center text-slate-500 font-mono text-xs">{s.qty.toLocaleString()}주 / {s.market.includes('해외') ? `$${s.avg}` : `${formatComma(s.avg)}원`}</td>
+                            <td className="px-8 py-5 text-center text-slate-500 font-mono text-xs">{s.qty.toLocaleString()}주 / {isOS ? `$${s.avg}` : `${formatComma(s.avg)}원`}</td>
                             <td className={`px-8 py-5 text-right font-black ${isUp ? 'text-rose-500' : 'text-blue-500'}`}>
                               <div className="text-sm">{isUp ? '▲' : '▼'} {yR}%</div>
                               <div className="text-[10px] opacity-60 font-medium">{isUp ? '+' : ''}{formatComma(profKrw)}원</div>
@@ -268,6 +257,7 @@ export default function AssetMasterFinalV2() {
           </div>
         )}
 
+        {/* --- 실물/부채 탭 (기존과 동일) --- */}
         {activeTab === 'realestate' && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in duration-500">
             <div className="bg-slate-900 p-8 rounded-[40px] border border-slate-800">
@@ -297,6 +287,7 @@ export default function AssetMasterFinalV2() {
           </div>
         )}
 
+        {/* --- 예적금 탭 (기존과 동일) --- */}
         {activeTab === 'savings' && (
           <div className="bg-slate-900 rounded-[40px] border border-slate-800 p-8 animate-in fade-in duration-500 space-y-6">
             <div className="flex justify-between items-center mb-6"><h3 className="text-xl font-black text-white italic">Savings Simulator</h3><button onClick={() => setSavings([...savings, { id: Date.now(), name: '', monthly: 0, current: 0, maturityDate: '', transferDay: 1, interestRate: 0 }])} className="bg-emerald-600 px-4 py-2 rounded-full text-[10px] font-bold">+ 추가</button></div>
@@ -318,9 +309,8 @@ export default function AssetMasterFinalV2() {
                     <div><p className="text-[10px] text-slate-500 mb-1 font-bold uppercase tracking-widest">만기일</p><input type="date" value={s.maturityDate} onChange={e => setSavings(savings.map(sv => sv.id === s.id ? {...sv, maturityDate: e.target.value} : sv))} className="bg-slate-900 text-white p-2 rounded-lg text-[10px] border border-slate-700 w-full" /></div>
                   </div>
                   <div className="w-full xl:w-1/3 bg-emerald-900/10 p-6 rounded-2xl border border-emerald-900/30 text-right flex flex-col justify-center">
-                    <p className="text-[10px] text-emerald-400 mb-1 font-black uppercase tracking-widest">만기 예상액 (이자포함)</p>
+                    <p className="text-[10px] text-emerald-400 mb-1 font-black uppercase tracking-widest">만기 예상액</p>
                     <p className="text-3xl font-black text-white leading-none">{formatComma(fVal)}<span className="text-sm ml-1 font-light opacity-50">원</span></p>
-                    <p className="text-[10px] text-slate-500 mt-2">남은 납입: {Math.max(0, mCount)}회</p>
                   </div>
                 </div>
               );
@@ -328,6 +318,7 @@ export default function AssetMasterFinalV2() {
           </div>
         )}
 
+        {/* --- 실현손익 탭 (기존과 동일) --- */}
         {activeTab === 'realized' && (
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="bg-gradient-to-r from-emerald-900/40 to-teal-900/40 p-10 rounded-[40px] border border-emerald-500/20 text-center shadow-xl">
@@ -336,7 +327,6 @@ export default function AssetMasterFinalV2() {
                 {realized.reduce((a,r)=>a+r.profit,0) >= 0 ? '+' : ''}{formatComma(realized.reduce((a,r)=>a+r.profit,0))} <span className="text-xl font-light opacity-60 text-white">원</span>
               </h2>
             </div>
-
             <div className="bg-[#161a22] rounded-[40px] border border-slate-800 overflow-hidden shadow-2xl">
               <div className="px-8 py-6 border-b border-slate-800 bg-slate-900/40 flex justify-between items-center">
                 <span className="font-black text-white tracking-widest uppercase text-sm">Monthly Settlement</span>
