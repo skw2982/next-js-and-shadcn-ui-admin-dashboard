@@ -24,7 +24,6 @@ interface Debt { id: number; name: string; value: number; }
 interface Saving { id: number; name: string; monthly: number; current: number; maturityDate: string; transferDay: number; interestRate: number; }
 interface Realized { date: string; name: string; qty: number; profit: number; yieldRate: number; note: string; }
 
-// 탭에 시뮬레이션 추가
 type TabKey = "overview" | "stocks" | "realestate" | "savings" | "realized" | "simulation";
 
 const TABS: { key: TabKey; label: string; num: string }[] = [
@@ -37,22 +36,31 @@ const TABS: { key: TabKey; label: string; num: string }[] = [
 ];
 
 // ═══════════════════════════════════════════
-// Utilities (TypeScript Fixes)
+// Utilities 
 // ═══════════════════════════════════════════
-// any 대신 unknown 사용 및 타입 안전성 확보
 const cleanNum = (val: unknown): number => {
-  if (val == null) return 0;
+  if (val == null || val === "") return 0;
   const cleaned = String(val).replace(/[^0-9.\-]+/g, "");
   const n = parseFloat(cleaned);
   return isNaN(n) ? 0 : n;
 };
-const fmt = (num: number): string => Math.round(num).toLocaleString();
+
+// 정수형 콤마 (원화용)
+const fmt = (num: number): string => Math.round(num).toLocaleString("ko-KR");
+
+// 소수점 콤마 유지 (달러 등 해외주식 및 평단가용)
+const fmtDecimal = (num: number): string => {
+  if (!num) return "0";
+  return num.toLocaleString("ko-KR", { maximumFractionDigits: 2 });
+};
+
 const fmtShort = (n: number): string => {
   const abs = Math.abs(n);
   if (abs >= 1e8) return (n / 1e8).toFixed(1) + "억";
   if (abs >= 1e4) return (n / 1e4).toFixed(0) + "만";
   return fmt(n);
 };
+
 const pctColor = (v: number) => (v >= 0 ? "text-rose-500" : "text-blue-500");
 const pctSign = (v: number) => (v >= 0 ? "+" : "");
 const pctArrow = (v: number) => (v >= 0 ? "▲" : "▼");
@@ -75,7 +83,6 @@ function StatCard({ label, value, sub, variant = "default" }: { label: string; v
   );
 }
 
-// 타입 지정된 차트 툴팁
 const ChartTooltip = ({ active, payload, label }: { active?: boolean; payload?: { name: string; value: number }[]; label?: string }) => {
   if (!active || !payload?.length) return null;
   return (
@@ -103,10 +110,8 @@ export default function AssetMasterV2() {
   const [debts, setDebts] = useState<Debt[]>([]);
   const [savings, setSavings] = useState<Saving[]>([]);
   
-  // 목표가 저장 상태
   const [targetPrices, setTargetPrices] = useState<Record<string, number>>({});
 
-  // LocalStorage에서 목표가 불러오기
   useEffect(() => {
     setIsClient(true);
     const savedTargets = localStorage.getItem("am_targetPrices");
@@ -115,8 +120,15 @@ export default function AssetMasterV2() {
     }
   }, []);
 
-  // 목표가 변경 시 LocalStorage 저장
+  // 목표가 입력 핸들러 (입력값이 지워지면 0 대신 삭제 처리)
   const handleTargetChange = (name: string, val: string) => {
+    if (val === "") {
+      const newTargets = { ...targetPrices };
+      delete newTargets[name];
+      setTargetPrices(newTargets);
+      localStorage.setItem("am_targetPrices", JSON.stringify(newTargets));
+      return;
+    }
     const num = cleanNum(val);
     const newTargets = { ...targetPrices, [name]: num };
     setTargetPrices(newTargets);
@@ -241,28 +253,42 @@ export default function AssetMasterV2() {
     return acc;
   }, [realized]);
 
-  // 목표가 시뮬레이터 연산
+  // 🚨 목표가 시뮬레이터 연산 (종목 단위로 계좌 통합)
   const simulationData = useMemo(() => {
     let currentKrwTotal = 0;
     let targetKrwTotal = 0;
 
-    const items = stocks.map(s => {
-      const isOS = s.market.includes("해외");
-      const rate = isOS ? exchangeRate : 1;
-      
-      const currentKrw = s.current * rate * s.qty;
+    // 1. 종목명 기준으로 계좌 무관하게 수량 통합
+    interface AggregatedStock { name: string; qty: number; current: number; isOS: boolean; rate: number; }
+    const aggMap: Record<string, AggregatedStock> = {};
+    
+    stocks.forEach(s => {
+      if (!aggMap[s.name]) {
+        aggMap[s.name] = {
+          name: s.name,
+          qty: 0,
+          current: s.current,
+          isOS: s.market.includes("해외"),
+          rate: s.market.includes("해외") ? exchangeRate : 1,
+        };
+      }
+      aggMap[s.name].qty += s.qty; // 수량 합산
+    });
+
+    // 2. 통합된 종목 기준으로 연산
+    const items = Object.values(aggMap).map(item => {
+      const currentKrw = item.current * item.rate * item.qty;
       currentKrwTotal += currentKrw;
 
-      // 설정된 목표가가 없으면 현재가를 목표가로 사용 (수익금 0원)
-      const target = targetPrices[s.name] || s.current;
-      const targetKrw = target * rate * s.qty;
+      const target = targetPrices[item.name] || item.current;
+      const targetKrw = target * item.rate * item.qty;
       targetKrwTotal += targetKrw;
 
-      const diffPct = s.current > 0 ? ((target - s.current) / s.current) * 100 : 0;
+      const diffPct = item.current > 0 ? ((target - item.current) / item.current) * 100 : 0;
       const expectedProfit = targetKrw - currentKrw;
 
-      return { ...s, target, diffPct, expectedProfit, currentKrw, targetKrw, isOS, rate };
-    }).sort((a, b) => b.currentKrw - a.currentKrw); // 보유 비중 큰 순서대로 정렬
+      return { ...item, target, diffPct, expectedProfit, currentKrw, targetKrw };
+    }).sort((a, b) => b.currentKrw - a.currentKrw);
 
     return { items, currentKrwTotal, targetKrwTotal, expectedExtraProfit: targetKrwTotal - currentKrwTotal };
   }, [stocks, targetPrices, exchangeRate]);
@@ -272,25 +298,23 @@ export default function AssetMasterV2() {
   return (
     <div className="min-h-screen bg-[#0c0e12] text-slate-200 p-4 md:p-8 font-sans selection:bg-blue-500/30">
       <div className="max-w-5xl mx-auto">
-        {/* Header */}
         <header className="mb-8 flex flex-wrap justify-between items-end border-b border-slate-800 pb-6 gap-4">
           <div>
-            <h1 className="text-4xl font-black text-white italic tracking-tighter">ASSET MASTER V3</h1>
+            <h1 className="text-4xl font-black text-white italic tracking-tighter">ASSET MASTER V3.1</h1>
             <p className="text-slate-500 text-[10px] font-bold tracking-[0.3em] uppercase mt-1">LG MDI Accounting Dept · {lastUpdated}</p>
           </div>
           <div className="flex items-center gap-3">
             <button 
               onClick={fetchAllData} 
               disabled={loading}
-              className={`text-[10px] px-3 py-2 rounded-xl font-bold transition-all ${loading ? "bg-blue-600 text-white animate-pulse" : "text-slate-400 bg-slate-800 hover:bg-slate-700"}`}
+              className={`text-[10px] px-3 py-2 rounded-xl font-bold transition-all ${loading ? "bg-blue-600 text-white animate-pulse cursor-wait" : "text-slate-400 bg-slate-800 hover:bg-slate-700"}`}
             >
               {loading ? "🔄 동기화 중..." : "↻ 새로고침"}
             </button>
-            <div className="text-[10px] text-amber-500 font-mono bg-amber-500/10 px-4 py-2 rounded-2xl border border-amber-500/20 font-bold">USD/KRW: {exchangeRate.toFixed(2)}</div>
+            <div className="text-[10px] text-amber-500 font-mono bg-amber-500/10 px-4 py-2 rounded-2xl border border-amber-500/20 font-bold">USD/KRW: {fmtDecimal(exchangeRate)}</div>
           </div>
         </header>
 
-        {/* Tabs */}
         <nav className="flex gap-2 mb-10 overflow-x-auto pb-2 scrollbar-hide">
           {TABS.map((t) => (
             <button key={t.key} onClick={() => setActiveTab(t.key)} className={`px-6 py-3 rounded-2xl font-black text-[10px] tracking-widest uppercase transition-all whitespace-nowrap ${activeTab === t.key ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" : "bg-slate-900 text-slate-500 hover:text-slate-300"}`}>
@@ -299,7 +323,6 @@ export default function AssetMasterV2() {
           ))}
         </nav>
 
-        {/* TAB 1: OVERVIEW */}
         {activeTab === "overview" && (
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="bg-gradient-to-br from-blue-900/40 to-slate-900 p-12 rounded-[50px] border border-blue-500/20 shadow-2xl flex justify-between items-center flex-wrap gap-8">
@@ -345,7 +368,6 @@ export default function AssetMasterV2() {
           </div>
         )}
 
-        {/* TAB 2: STOCKS */}
         {activeTab === "stocks" && (
           <div className="space-y-8 animate-in fade-in duration-500">
             {Object.keys(grouped).map((acc) => (
@@ -381,7 +403,7 @@ export default function AssetMasterV2() {
                         return (
                           <tr key={i} className="hover:bg-white/[0.02]">
                             <td className="px-8 py-5 font-bold text-slate-200">{s.name}<div className="text-[10px] font-medium text-slate-500 mt-1">{isOS ? "해외" : "국내"}</div></td>
-                            <td className="px-8 py-5 text-center text-slate-500 font-mono text-xs">{s.qty}주 / {isOS ? `$${s.avg}` : `${fmt(s.avg)}원`}</td>
+                            <td className="px-8 py-5 text-center text-slate-500 font-mono text-xs">{fmt(s.qty)}주 / {isOS ? `$${fmtDecimal(s.avg)}` : `${fmt(s.avg)}원`}</td>
                             <td className="px-8 py-5 text-right font-black">
                               <div className={`text-sm ${pctColor(dProfKrw)}`}>{pctSign(dProfKrw)}{fmt(dProfKrw)}원</div>
                               <div className={`text-[10px] opacity-60 ${pctColor(profKrw)}`}>{pctSign(profKrw)}{fmt(profKrw)}원 ({yR.toFixed(1)}%)</div>
@@ -397,7 +419,7 @@ export default function AssetMasterV2() {
           </div>
         )}
 
-        {/* TAB 3: REAL ASSETS & DEBTS */}
+        {/* TAB 3 & 4 (실물/예적금) 동일 유지, 콤마 추가 적용 */}
         {activeTab === "realestate" && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in duration-500">
             <Card className="p-8">
@@ -409,7 +431,6 @@ export default function AssetMasterV2() {
                     <span className="font-black text-blue-400">{fmt(a.value)}원</span>
                   </div>
                 ))}
-                {assets.length === 0 && <p className="text-slate-600 text-center py-10">자산 데이터가 없습니다.</p>}
               </div>
             </Card>
             <Card className="p-8 border-rose-900/30 bg-rose-900/10">
@@ -421,13 +442,11 @@ export default function AssetMasterV2() {
                     <span className="font-black text-rose-400">{fmt(d.value)}원</span>
                   </div>
                 ))}
-                {debts.length === 0 && <p className="text-slate-600 text-center py-10">부채 데이터가 없습니다.</p>}
               </div>
             </Card>
           </div>
         )}
 
-        {/* TAB 4: SAVINGS */}
         {activeTab === "savings" && (
           <div className="space-y-6 animate-in fade-in duration-500">
             {savings.map((s) => {
@@ -456,11 +475,9 @@ export default function AssetMasterV2() {
                 </Card>
               );
             })}
-            {savings.length === 0 && <Card className="p-20 text-center text-slate-600">예적금 데이터가 없습니다.</Card>}
           </div>
         )}
 
-        {/* TAB 5: REALIZED P&L */}
         {activeTab === "realized" && (
           <div className="space-y-6 animate-in fade-in duration-500">
             {Object.keys(realizedGrouped).map((m) => (
@@ -475,7 +492,11 @@ export default function AssetMasterV2() {
                       {realizedGrouped[m].items.map((r, i) => (
                         <tr key={i} className="hover:bg-white/[0.02]">
                           <td className="px-8 py-4 text-xs text-slate-500 font-mono">{r.date}</td>
-                          <td className="px-8 py-4 font-bold text-slate-200">{r.name}<span className="ml-2 text-[10px] text-slate-600 font-normal">{r.note}</span></td>
+                          <td className="px-8 py-4 font-bold text-slate-200">
+                            {r.name}
+                            <span className="ml-2 text-xs text-slate-400">({fmt(r.qty)}주)</span>
+                            <span className="ml-2 text-[10px] text-slate-600 font-normal">{r.note}</span>
+                          </td>
                           <td className={`px-8 py-4 text-right font-black ${pctColor(r.profit)}`}>{pctSign(r.profit)}{fmt(r.profit)}원</td>
                         </tr>
                       ))}
@@ -484,14 +505,12 @@ export default function AssetMasterV2() {
                 </div>
               </Card>
             ))}
-            {realized.length === 0 && <Card className="p-20 text-center text-slate-600">실현 손익 데이터가 없습니다.</Card>}
           </div>
         )}
 
-        {/* TAB 6: TARGET SIMULATION (새로 추가됨!) */}
+        {/* TAB 6: TARGET SIMULATION */}
         {activeTab === "simulation" && (
           <div className="space-y-6 animate-in fade-in duration-500">
-            {/* 요약 대시보드 */}
             <div className="bg-gradient-to-r from-indigo-900/30 to-purple-900/30 p-8 rounded-[40px] border border-indigo-500/20 shadow-xl flex flex-col md:flex-row justify-between items-center gap-6">
               <div>
                 <p className="text-indigo-400 text-[10px] font-black tracking-widest uppercase mb-2">목표 달성 시 주식 평가액</p>
@@ -503,23 +522,22 @@ export default function AssetMasterV2() {
               </div>
             </div>
 
-            {/* 입력 리스트 */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {simulationData.items.map((item, i) => (
                 <Card key={i} className="p-6 flex flex-col gap-4">
                   <div className="flex justify-between items-start">
                     <div>
                       <h3 className="text-lg font-black text-white">{item.name}</h3>
-                      <p className="text-xs text-slate-500 mt-1">보유: {item.qty}주 | 현재가: {item.isOS ? `$${item.current}` : `${fmt(item.current)}원`}</p>
+                      <p className="text-xs text-slate-500 mt-1">보유: {fmt(item.qty)}주 (통합) | 현재가: {item.isOS ? `$${fmtDecimal(item.current)}` : `${fmt(item.current)}원`}</p>
                     </div>
                     <div className="text-right">
                       <p className="text-[10px] text-slate-500 font-black uppercase mb-1">목표가 설정 {item.isOS ? "(USD)" : "(KRW)"}</p>
                       <input 
-                        type="number" 
-                        value={targetPrices[item.name] || ""} 
+                        type="text" 
+                        value={targetPrices[item.name] ? fmtDecimal(targetPrices[item.name]) : ""} 
                         onChange={(e) => handleTargetChange(item.name, e.target.value)}
-                        placeholder={item.current.toString()}
-                        className="w-24 bg-slate-950 text-white font-bold p-2 rounded-lg border border-slate-700 outline-none focus:border-indigo-500 text-right transition-colors"
+                        placeholder={fmtDecimal(item.current)}
+                        className="w-28 bg-slate-950 text-white font-bold p-2 rounded-lg border border-slate-700 outline-none focus:border-indigo-500 text-right transition-colors"
                       />
                     </div>
                   </div>
@@ -532,7 +550,7 @@ export default function AssetMasterV2() {
                       </p>
                     </div>
                     <div className="text-right">
-                      <p className="text-[10px] text-slate-500 uppercase">예상 추가 수익</p>
+                      <p className="text-[10px] text-slate-500 uppercase">예상 추가 수익 (환율적용)</p>
                       <p className={`font-black ${item.expectedProfit >= 0 ? "text-rose-400" : "text-blue-400"}`}>
                         {pctSign(item.expectedProfit)}{fmt(item.expectedProfit)}원
                       </p>
@@ -541,12 +559,12 @@ export default function AssetMasterV2() {
                 </Card>
               ))}
             </div>
-            <p className="text-center text-slate-600 text-[10px] mt-4">💾 입력하신 목표가는 브라우저에 안전하게 자동 저장됩니다.</p>
+            <p className="text-center text-slate-600 text-[10px] mt-4">💾 여러 계좌에 흩어진 동일 종목은 하나로 묶어 보여줍니다. 목표가는 브라우저에 자동 저장됩니다.</p>
           </div>
         )}
 
         <footer className="mt-20 py-8 border-t border-slate-900 text-center">
-          <p className="text-slate-700 text-[10px] font-black tracking-widest uppercase">Asset Master V3 · Powered by Google Sheets · LG MDI Accounting</p>
+          <p className="text-slate-700 text-[10px] font-black tracking-widest uppercase">Asset Master V3.1 · Powered by Google Sheets · LG MDI Accounting</p>
         </footer>
       </div>
     </div>
