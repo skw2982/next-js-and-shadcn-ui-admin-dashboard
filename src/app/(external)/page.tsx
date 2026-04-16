@@ -6,7 +6,7 @@ import {
 } from "recharts";
 
 // ═══════════════════════════════════════════
-// ☁️ 클라우드 저장소(Vercel KV) 연결 정보 (세팅 완료!)
+// ☁️ 클라우드 저장소(Vercel KV) 연결 정보
 // ═══════════════════════════════════════════
 const KV_URL = "https://chief-jay-84148.upstash.io"; 
 const KV_TOKEN = "gQAAAAAAUUI0AAIncDE5MmI4ZmFkNGQwN2E0NTNmYjAwY2ExNGQ1YzI1MTI3OHAxODQxNDg";
@@ -88,7 +88,7 @@ const ChartTooltip = ({ active, payload, label }: { active?: boolean; payload?: 
   );
 };
 
-export default function AssetMasterV3_5() {
+export default function AssetMasterV3_6() {
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [isClient, setIsClient] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -104,7 +104,6 @@ export default function AssetMasterV3_5() {
   
   const [targetPrices, setTargetPrices] = useState<Record<string, number>>({});
 
-  // ☁️ 클라우드 데이터 로딩 로직
   useEffect(() => {
     setIsClient(true);
     const loadCloudData = async () => {
@@ -113,7 +112,6 @@ export default function AssetMasterV3_5() {
           headers: { Authorization: `Bearer ${KV_TOKEN}` }
         });
         const data = await res.json();
-        // Upstash REST API는 결과값이 { result: "데이터" } 형식으로 옵니다.
         if (data.result) {
           setTargetPrices(typeof data.result === 'string' ? JSON.parse(data.result) : data.result);
         }
@@ -122,7 +120,6 @@ export default function AssetMasterV3_5() {
     loadCloudData();
   }, []);
 
-  // ☁️ 클라우드 데이터 저장 로직
   const saveToCloud = async (newTargets: Record<string, number>) => {
     try {
       await fetch(`${KV_URL}/set/user_targets`, {
@@ -259,30 +256,58 @@ export default function AssetMasterV3_5() {
     return acc;
   }, [realized]);
 
+  // 🚨 목표가 시뮬레이터 연산 (종목 통합 + 최종 수익 계산)
   const simulationData = useMemo(() => {
     let currentKrwTotal = 0;
     let targetKrwTotal = 0;
-    const aggMap: Record<string, { name: string; qty: number; current: number; isOS: boolean; rate: number; }> = {};
+    let totalCostKrw = 0;
+
+    const aggMap: Record<string, { name: string; qty: number; current: number; avg: number; isOS: boolean; rate: number; totalCost: number; }> = {};
     
     stocks.forEach(s => {
+      const isOS = s.market.includes("해외");
+      const rate = isOS ? exchangeRate : 1;
       if (!aggMap[s.name]) {
-        aggMap[s.name] = { name: s.name, qty: 0, current: s.current, isOS: s.market.includes("해외"), rate: s.market.includes("해외") ? exchangeRate : 1 };
+        aggMap[s.name] = { 
+          name: s.name, 
+          qty: 0, 
+          current: s.current, 
+          avg: 0, // 가중평균을 위해 아래에서 합산 후 계산
+          isOS, 
+          rate,
+          totalCost: 0 
+        };
       }
       aggMap[s.name].qty += s.qty;
+      aggMap[s.name].totalCost += (s.avg * s.qty * rate); // 환율 적용된 총 매수 비용
     });
 
     const items = Object.values(aggMap).map(item => {
       const currentKrw = item.current * item.rate * item.qty;
       currentKrwTotal += currentKrw;
+      totalCostKrw += item.totalCost;
+
       const target = targetPrices[item.name] || item.current;
       const targetKrw = target * item.rate * item.qty;
       targetKrwTotal += targetKrw;
+
       const diffPct = item.current > 0 ? ((target - item.current) / item.current) * 100 : 0;
-      const expectedProfit = targetKrw - currentKrw;
-      return { ...item, target, diffPct, expectedProfit, currentKrw, targetKrw };
+      const expectedExtraProfit = targetKrw - currentKrw;
+      
+      // 최종 수익 (목표 평가액 - 총 매수 원금)
+      const finalProfit = targetKrw - item.totalCost;
+      const finalYield = item.totalCost > 0 ? (finalProfit / item.totalCost) * 100 : 0;
+
+      return { ...item, target, diffPct, expectedExtraProfit, finalProfit, finalYield, currentKrw, targetKrw };
     }).sort((a, b) => b.currentKrw - a.currentKrw);
 
-    return { items, currentKrwTotal, targetKrwTotal, expectedExtraProfit: targetKrwTotal - currentKrwTotal };
+    return { 
+      items, 
+      currentKrwTotal, 
+      targetKrwTotal, 
+      expectedExtraProfit: targetKrwTotal - currentKrwTotal,
+      totalProfitAtTarget: targetKrwTotal - totalCostKrw
+    };
   }, [stocks, targetPrices, exchangeRate]);
 
   if (!isClient) return <div className="min-h-screen bg-[#0c0e12]" />;
@@ -292,7 +317,7 @@ export default function AssetMasterV3_5() {
       <div className="max-w-5xl mx-auto">
         <header className="mb-8 flex flex-wrap justify-between items-end border-b border-slate-800 pb-6 gap-4">
           <div>
-            <h1 className="text-4xl font-black text-white italic tracking-tighter">ASSET MASTER V3.5</h1>
+            <h1 className="text-4xl font-black text-white italic tracking-tighter">ASSET MASTER V3.6</h1>
             <p className="text-slate-500 text-[10px] font-bold tracking-[0.3em] uppercase mt-1">LG MDI Accounting · {lastUpdated}</p>
           </div>
           <div className="flex items-center gap-3">
@@ -305,7 +330,7 @@ export default function AssetMasterV3_5() {
 
         <nav className="flex gap-2 mb-10 overflow-x-auto pb-2 scrollbar-hide">
           {TABS.map((t) => (
-            <button key={t.key} onClick={() => setActiveTab(t.key)} className={`px-6 py-3 rounded-2xl font-black text-[10px] tracking-widest uppercase transition-all whitespace-nowrap ${activeTab === t.key ? "bg-blue-600 text-white shadow-lg" : "bg-slate-900 text-slate-500 hover:text-slate-300"}`}>
+            <button key={t.key} onClick={() => setActiveTab(t.key)} className={`px-6 py-3 rounded-2xl font-black text-[10px] tracking-widest uppercase transition-all whitespace-nowrap ${activeTab === t.key ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" : "bg-slate-900 text-slate-500 hover:text-slate-300"}`}>
               {t.num}. {t.label}
             </button>
           ))}
@@ -495,17 +520,19 @@ export default function AssetMasterV3_5() {
           </div>
         )}
 
-        {/* 🎯 목표가 시뮬레이션 (클라우드 동기화 탭) */}
+        {/* 🎯 목표가 시뮬레이션 V3.6 (최종 수익 로직 추가) */}
         {activeTab === "simulation" && (
           <div className="space-y-6 animate-in fade-in duration-500">
-            <div className="bg-gradient-to-r from-indigo-900/30 to-purple-900/30 p-8 rounded-[40px] border border-indigo-500/20 shadow-xl flex flex-col md:flex-row justify-between items-center gap-6">
-              <div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-gradient-to-r from-indigo-900/30 to-purple-900/30 p-8 rounded-[40px] border border-indigo-500/20 shadow-xl">
                 <p className="text-indigo-400 text-[10px] font-black uppercase mb-2">목표 달성 시 주식 평가액</p>
-                <h2 className="text-4xl md:text-5xl font-black text-white">{fmt(simulationData.targetKrwTotal)}<span className="text-xl font-light ml-2 opacity-50">KRW</span></h2>
+                <h2 className="text-4xl font-black text-white">{fmt(simulationData.targetKrwTotal)} 원</h2>
+                <p className="text-xs text-slate-500 mt-2">현재가 대비 +{fmt(simulationData.expectedExtraProfit)} 원 추가 상승 기대</p>
               </div>
-              <div className="text-right">
-                <p className="text-[10px] text-slate-500 font-black uppercase mb-2">예상 추가 수익금 (현재가 대비)</p>
-                <p className="text-3xl font-black text-rose-400">+{fmt(simulationData.expectedExtraProfit)} 원</p>
+              <div className="bg-gradient-to-r from-emerald-900/30 to-teal-900/30 p-8 rounded-[40px] border border-emerald-500/20 shadow-xl">
+                <p className="text-emerald-400 text-[10px] font-black uppercase mb-2">목표 달성 시 총 손익 (누적)</p>
+                <h2 className="text-4xl font-black text-white">{pctSign(simulationData.totalProfitAtTarget)}{fmt(simulationData.totalProfitAtTarget)} 원</h2>
+                <p className="text-xs text-slate-500 mt-2">매수 원금 대비 모든 종목 목표가 도달 시 결과</p>
               </div>
             </div>
 
@@ -515,10 +542,10 @@ export default function AssetMasterV3_5() {
                   <div className="flex justify-between items-start">
                     <div>
                       <h3 className="text-lg font-black text-white">{item.name}</h3>
-                      <p className="text-xs text-slate-500 mt-1">보유: {fmt(item.qty)}주 (통합) | 현재가: {item.isOS ? `$${fmtDecimal(item.current)}` : `${fmt(item.current)}원`}</p>
+                      <p className="text-xs text-slate-500 mt-1">보유: {fmt(item.qty)}주 | 현재가: {item.isOS ? `$${fmtDecimal(item.current)}` : `${fmt(item.current)}원`}</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-[10px] text-slate-500 font-black uppercase mb-1">목표가 설정 {item.isOS ? "(USD)" : "(KRW)"}</p>
+                      <p className="text-[10px] text-slate-500 font-black uppercase mb-1">목표가 {item.isOS ? "(USD)" : "(KRW)"}</p>
                       <input 
                         type="text" 
                         value={targetPrices[item.name] ? fmtDecimal(targetPrices[item.name]) : ""} 
@@ -529,29 +556,44 @@ export default function AssetMasterV3_5() {
                     </div>
                   </div>
                   
-                  <div className="bg-slate-950 p-4 rounded-2xl flex justify-between items-center border border-slate-800">
-                    <div>
-                      <p className="text-[10px] text-slate-500 uppercase">목표 달성률</p>
-                      <p className={`font-black ${item.diffPct >= 0 ? "text-rose-400" : "text-blue-400"}`}>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                      <p className="text-[10px] text-slate-500 uppercase mb-1">상승 여력</p>
+                      <p className={`font-black text-sm ${item.diffPct >= 0 ? "text-rose-400" : "text-blue-400"}`}>
                         {item.diffPct >= 0 ? "▲" : "▼"} {Math.abs(item.diffPct).toFixed(1)}%
                       </p>
                     </div>
+                    <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                      <p className="text-[10px] text-slate-500 uppercase mb-1">추가 수익금</p>
+                      <p className={`font-black text-sm ${item.expectedProfit >= 0 ? "text-rose-400" : "text-blue-400"}`}>
+                        +{fmt(item.expectedProfit)}원
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="bg-indigo-900/10 p-5 rounded-2xl border border-indigo-500/20 flex justify-between items-center">
+                    <div>
+                      <p className="text-[10px] text-indigo-400 font-black uppercase">목표가 달성 시 최종 수익</p>
+                      <p className={`text-xl font-black ${pctColor(item.finalProfit)}`}>
+                        {pctSign(item.finalProfit)}{fmt(item.finalProfit)} 원
+                      </p>
+                    </div>
                     <div className="text-right">
-                      <p className="text-[10px] text-slate-500 uppercase">예상 추가 수익 (환율적용)</p>
-                      <p className={`font-black ${item.expectedProfit >= 0 ? "text-rose-400" : "text-blue-400"}`}>
-                        {pctSign(item.expectedProfit)}{fmt(item.expectedProfit)}원
+                      <p className="text-[10px] text-indigo-400 font-black uppercase">예상 수익률</p>
+                      <p className={`text-xl font-black ${pctColor(item.finalYield)}`}>
+                        {pctSign(item.finalYield)}{item.finalYield.toFixed(1)}%
                       </p>
                     </div>
                   </div>
                 </Card>
               ))}
             </div>
-            <p className="text-center text-slate-600 text-[10px] mt-4">☁️ 이 데이터는 Vercel KV 클라우드에 안전하게 저장되어 모든 기기에서 동기화됩니다.</p>
+            <p className="text-center text-slate-600 text-[10px] mt-4">💰 최종 수익은 여러 계좌의 평단가를 가중평균하여 산출한 매수 원금 대비 결과입니다.</p>
           </div>
         )}
 
         <footer className="mt-20 py-8 border-t border-slate-900 text-center">
-          <p className="text-slate-700 text-[10px] font-black tracking-widest uppercase">Asset Master V3.5 · Powered by Vercel KV · LG MDI Accounting</p>
+          <p className="text-slate-700 text-[10px] font-black tracking-widest uppercase">Asset Master V3.6 · Powered by Vercel KV · LG MDI Accounting</p>
         </footer>
       </div>
     </div>
