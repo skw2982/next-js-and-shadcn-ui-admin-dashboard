@@ -56,7 +56,7 @@ const fmtDecimal = (num: number): string => {
 const fmtShort = (n: number): string => {
   const abs = Math.abs(n);
   if (abs >= 1e8) return (n / 1e8).toFixed(1) + "억";
-  if (abs >= 1e4) return (n / 1e4).toFixed(0) + "만";
+  if (abs >= 1e4) return Math.round(n / 1e4).toLocaleString() + "만";
   return fmt(n);
 };
 
