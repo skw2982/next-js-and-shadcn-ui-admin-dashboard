@@ -6,8 +6,11 @@ import {
 } from "recharts";
 
 // ═══════════════════════════════════════════
-// Config & Data Sources
+// ☁️ 클라우드 저장소(Vercel KV) 연결 정보 (세팅 완료!)
 // ═══════════════════════════════════════════
+const KV_URL = "https://chief-jay-84148.upstash.io"; 
+const KV_TOKEN = "gQAAAAAAUUI0AAIncDE5MmI4ZmFkNGQwN2E0NTNmYjAwY2ExNGQ1YzI1MTI3OHAxODQxNDg";
+
 const BASE_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOtqLayVYNftdkuatjh1_z-8xVj1EgYGRU3L5O_NAPjQDSVGlK/pub?";
 
 const GIDS = {
@@ -35,9 +38,6 @@ const TABS: { key: TabKey; label: string; num: string }[] = [
   { key: "simulation", label: "🎯 목표가 시뮬레이션", num: "6" },
 ];
 
-// ═══════════════════════════════════════════
-// Utilities 
-// ═══════════════════════════════════════════
 const cleanNum = (val: unknown): number => {
   if (val == null || val === "") return 0;
   const cleaned = String(val).replace(/[^0-9.\-]+/g, "");
@@ -45,10 +45,7 @@ const cleanNum = (val: unknown): number => {
   return isNaN(n) ? 0 : n;
 };
 
-// 정수형 콤마 (원화용)
 const fmt = (num: number): string => Math.round(num).toLocaleString("ko-KR");
-
-// 소수점 콤마 유지 (달러 등 해외주식 및 평단가용)
 const fmtDecimal = (num: number): string => {
   if (!num) return "0";
   return num.toLocaleString("ko-KR", { maximumFractionDigits: 2 });
@@ -63,8 +60,6 @@ const fmtShort = (n: number): string => {
 
 const pctColor = (v: number) => (v >= 0 ? "text-rose-500" : "text-blue-500");
 const pctSign = (v: number) => (v >= 0 ? "+" : "");
-const pctArrow = (v: number) => (v >= 0 ? "▲" : "▼");
-const parseCSVRow = (row: string): string[] => row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map((v) => v.replace(/"/g, "").trim());
 
 function Card({ children, className = "" }: { children: React.ReactNode; className?: string; }) {
   return <div className={`bg-slate-900 rounded-[30px] border border-slate-800 shadow-xl ${className}`}>{children}</div>;
@@ -93,10 +88,7 @@ const ChartTooltip = ({ active, payload, label }: { active?: boolean; payload?: 
   );
 };
 
-// ═══════════════════════════════════════════
-// Main Component
-// ═══════════════════════════════════════════
-export default function AssetMasterV2() {
+export default function AssetMasterV3_5() {
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [isClient, setIsClient] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -112,27 +104,44 @@ export default function AssetMasterV2() {
   
   const [targetPrices, setTargetPrices] = useState<Record<string, number>>({});
 
+  // ☁️ 클라우드 데이터 로딩 로직
   useEffect(() => {
     setIsClient(true);
-    const savedTargets = localStorage.getItem("am_targetPrices");
-    if (savedTargets) {
-      try { setTargetPrices(JSON.parse(savedTargets)); } catch (e) {}
-    }
+    const loadCloudData = async () => {
+      try {
+        const res = await fetch(`${KV_URL}/get/user_targets`, {
+          headers: { Authorization: `Bearer ${KV_TOKEN}` }
+        });
+        const data = await res.json();
+        // Upstash REST API는 결과값이 { result: "데이터" } 형식으로 옵니다.
+        if (data.result) {
+          setTargetPrices(typeof data.result === 'string' ? JSON.parse(data.result) : data.result);
+        }
+      } catch (e) { console.error("Cloud 로딩 실패:", e); }
+    };
+    loadCloudData();
   }, []);
 
-  // 목표가 입력 핸들러 (입력값이 지워지면 0 대신 삭제 처리)
+  // ☁️ 클라우드 데이터 저장 로직
+  const saveToCloud = async (newTargets: Record<string, number>) => {
+    try {
+      await fetch(`${KV_URL}/set/user_targets`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${KV_TOKEN}` },
+        body: JSON.stringify(newTargets)
+      });
+    } catch (e) { console.error("Cloud 저장 실패:", e); }
+  };
+
   const handleTargetChange = (name: string, val: string) => {
+    let newTargets = { ...targetPrices };
     if (val === "") {
-      const newTargets = { ...targetPrices };
       delete newTargets[name];
-      setTargetPrices(newTargets);
-      localStorage.setItem("am_targetPrices", JSON.stringify(newTargets));
-      return;
+    } else {
+      newTargets[name] = cleanNum(val);
     }
-    const num = cleanNum(val);
-    const newTargets = { ...targetPrices, [name]: num };
     setTargetPrices(newTargets);
-    localStorage.setItem("am_targetPrices", JSON.stringify(newTargets));
+    saveToCloud(newTargets);
   };
 
   const fetchCSV = async (gid: string) => {
@@ -157,36 +166,36 @@ export default function AssetMasterV2() {
         fetchCSV(GIDS.STOCKS), fetchCSV(GIDS.REALIZED), fetchCSV(GIDS.ASSETS), fetchCSV(GIDS.DEBTS), fetchCSV(GIDS.SAVINGS)
       ]);
 
+      const parseRow = (row: string) => row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map((v) => v.replace(/"/g, "").trim());
+
       setStocks(sRows.map(row => {
-        const c = parseCSVRow(row);
+        const c = parseRow(row);
         return { market: c[0] || "국내", account: c[1] || "미분류", name: c[2] || "알 수 없음", avg: cleanNum(c[5]), current: cleanNum(c[6]), qty: cleanNum(c[7]), dailyChange: cleanNum(c[8]) };
       }).filter(s => s.qty > 0));
 
       setRealized(rRows.map(row => {
-        const c = parseCSVRow(row);
+        const c = parseRow(row);
         return { date: c[0], name: c[1], qty: cleanNum(c[2]), profit: cleanNum(c[3]), yieldRate: cleanNum(c[4]), note: c[5] };
       }));
 
       setAssets(aRows.map((row, i) => {
-        const c = parseCSVRow(row);
+        const c = parseRow(row);
         return { id: i, name: c[0] || "자산", value: cleanNum(c[1]) };
       }));
 
       setDebts(dRows.map((row, i) => {
-        const c = parseCSVRow(row);
+        const c = parseRow(row);
         return { id: i, name: c[0] || "부채", value: cleanNum(c[1]) };
       }));
 
       setSavings(svRows.map((row, i) => {
-        const c = parseCSVRow(row);
+        const c = parseRow(row);
         return { id: i, name: c[0] || "적금", monthly: cleanNum(c[1]), current: cleanNum(c[2]), maturityDate: c[3] || "2026-12-31", transferDay: cleanNum(c[4]), interestRate: cleanNum(c[5]) };
       }));
 
       setLastUpdated(new Date().toLocaleTimeString("ko-KR"));
       setLoading(false);
-    } catch (e) {
-      setLoading(false);
-    }
+    } catch (e) { setLoading(false); }
   }, []);
 
   useEffect(() => {
@@ -195,9 +204,6 @@ export default function AssetMasterV2() {
     return () => clearInterval(timer);
   }, [fetchAllData]);
 
-  // ═══════════════════════════════════════════
-  // Computed Values
-  // ═══════════════════════════════════════════
   const grouped = useMemo(() => {
     const acc: Record<string, { items: Stock[]; total: number; profit: number; dailyProfit: number }> = {};
     stocks.forEach((s) => {
@@ -253,40 +259,26 @@ export default function AssetMasterV2() {
     return acc;
   }, [realized]);
 
-  // 🚨 목표가 시뮬레이터 연산 (종목 단위로 계좌 통합)
   const simulationData = useMemo(() => {
     let currentKrwTotal = 0;
     let targetKrwTotal = 0;
-
-    // 1. 종목명 기준으로 계좌 무관하게 수량 통합
-    interface AggregatedStock { name: string; qty: number; current: number; isOS: boolean; rate: number; }
-    const aggMap: Record<string, AggregatedStock> = {};
+    const aggMap: Record<string, { name: string; qty: number; current: number; isOS: boolean; rate: number; }> = {};
     
     stocks.forEach(s => {
       if (!aggMap[s.name]) {
-        aggMap[s.name] = {
-          name: s.name,
-          qty: 0,
-          current: s.current,
-          isOS: s.market.includes("해외"),
-          rate: s.market.includes("해외") ? exchangeRate : 1,
-        };
+        aggMap[s.name] = { name: s.name, qty: 0, current: s.current, isOS: s.market.includes("해외"), rate: s.market.includes("해외") ? exchangeRate : 1 };
       }
-      aggMap[s.name].qty += s.qty; // 수량 합산
+      aggMap[s.name].qty += s.qty;
     });
 
-    // 2. 통합된 종목 기준으로 연산
     const items = Object.values(aggMap).map(item => {
       const currentKrw = item.current * item.rate * item.qty;
       currentKrwTotal += currentKrw;
-
       const target = targetPrices[item.name] || item.current;
       const targetKrw = target * item.rate * item.qty;
       targetKrwTotal += targetKrw;
-
       const diffPct = item.current > 0 ? ((target - item.current) / item.current) * 100 : 0;
       const expectedProfit = targetKrw - currentKrw;
-
       return { ...item, target, diffPct, expectedProfit, currentKrw, targetKrw };
     }).sort((a, b) => b.currentKrw - a.currentKrw);
 
@@ -300,15 +292,11 @@ export default function AssetMasterV2() {
       <div className="max-w-5xl mx-auto">
         <header className="mb-8 flex flex-wrap justify-between items-end border-b border-slate-800 pb-6 gap-4">
           <div>
-            <h1 className="text-4xl font-black text-white italic tracking-tighter">ASSET MASTER V3.1</h1>
-            <p className="text-slate-500 text-[10px] font-bold tracking-[0.3em] uppercase mt-1">LG MDI Accounting Dept · {lastUpdated}</p>
+            <h1 className="text-4xl font-black text-white italic tracking-tighter">ASSET MASTER V3.5</h1>
+            <p className="text-slate-500 text-[10px] font-bold tracking-[0.3em] uppercase mt-1">LG MDI Accounting · {lastUpdated}</p>
           </div>
           <div className="flex items-center gap-3">
-            <button 
-              onClick={fetchAllData} 
-              disabled={loading}
-              className={`text-[10px] px-3 py-2 rounded-xl font-bold transition-all ${loading ? "bg-blue-600 text-white animate-pulse cursor-wait" : "text-slate-400 bg-slate-800 hover:bg-slate-700"}`}
-            >
+            <button onClick={fetchAllData} disabled={loading} className={`text-[10px] px-3 py-2 rounded-xl font-bold transition-all ${loading ? "bg-blue-600 text-white animate-pulse" : "text-slate-400 bg-slate-800 hover:bg-slate-700"}`}>
               {loading ? "🔄 동기화 중..." : "↻ 새로고침"}
             </button>
             <div className="text-[10px] text-amber-500 font-mono bg-amber-500/10 px-4 py-2 rounded-2xl border border-amber-500/20 font-bold">USD/KRW: {fmtDecimal(exchangeRate)}</div>
@@ -317,7 +305,7 @@ export default function AssetMasterV2() {
 
         <nav className="flex gap-2 mb-10 overflow-x-auto pb-2 scrollbar-hide">
           {TABS.map((t) => (
-            <button key={t.key} onClick={() => setActiveTab(t.key)} className={`px-6 py-3 rounded-2xl font-black text-[10px] tracking-widest uppercase transition-all whitespace-nowrap ${activeTab === t.key ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" : "bg-slate-900 text-slate-500 hover:text-slate-300"}`}>
+            <button key={t.key} onClick={() => setActiveTab(t.key)} className={`px-6 py-3 rounded-2xl font-black text-[10px] tracking-widest uppercase transition-all whitespace-nowrap ${activeTab === t.key ? "bg-blue-600 text-white shadow-lg" : "bg-slate-900 text-slate-500 hover:text-slate-300"}`}>
               {t.num}. {t.label}
             </button>
           ))}
@@ -327,7 +315,7 @@ export default function AssetMasterV2() {
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="bg-gradient-to-br from-blue-900/40 to-slate-900 p-12 rounded-[50px] border border-blue-500/20 shadow-2xl flex justify-between items-center flex-wrap gap-8">
               <div>
-                <p className="text-blue-400 text-[10px] font-black tracking-widest uppercase mb-4 opacity-70">Current Net Worth</p>
+                <p className="text-blue-400 text-[10px] font-black uppercase mb-4 opacity-70">Current Net Worth</p>
                 <h2 className="text-5xl md:text-7xl font-black text-white tracking-tighter">{fmt(netWorth)}<span className="text-2xl font-light ml-2 opacity-30">KRW</span></h2>
               </div>
               <div className="text-right bg-white/5 p-6 rounded-3xl border border-white/10">
@@ -343,7 +331,7 @@ export default function AssetMasterV2() {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Card className="p-6">
-                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4">자산 구성 비중</p>
+                <p className="text-[10px] font-black text-slate-500 uppercase mb-4">자산 구성 비중</p>
                 <ResponsiveContainer width="100%" height={200}>
                   <PieChart>
                     <Pie data={compositionData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={3} strokeWidth={0}>
@@ -355,7 +343,7 @@ export default function AssetMasterV2() {
                 </ResponsiveContainer>
               </Card>
               <div className="bg-emerald-900/10 p-10 rounded-[50px] border border-emerald-900/30">
-                <div className="flex flex-wrap justify-between items-center mb-8 gap-4">
+                <div className="flex justify-between items-center mb-8 gap-4">
                   <h3 className="text-xl font-black text-emerald-400 italic">Future Projection</h3>
                   <input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} className="bg-slate-900 text-emerald-400 font-black p-3 rounded-2xl border border-emerald-900/50 outline-none" />
                 </div>
@@ -374,7 +362,7 @@ export default function AssetMasterV2() {
               <Card key={acc} className="overflow-hidden">
                 <div className="px-8 py-5 bg-slate-800/40 border-b border-slate-800 flex justify-between items-center flex-wrap gap-4">
                   <div className="flex items-center gap-4">
-                    <span className="font-black text-white italic tracking-tight text-lg">💳 {acc}</span>
+                    <span className="font-black text-white italic text-lg">💳 {acc}</span>
                     <span className={`text-[10px] font-black px-3 py-1 rounded-full ${grouped[acc].dailyProfit >= 0 ? "bg-rose-500/10 text-rose-500" : "bg-blue-500/10 text-blue-500"}`}>
                       오늘 {pctSign(grouped[acc].dailyProfit)}{fmt(grouped[acc].dailyProfit)}원
                     </span>
@@ -419,7 +407,6 @@ export default function AssetMasterV2() {
           </div>
         )}
 
-        {/* TAB 3 & 4 (실물/예적금) 동일 유지, 콤마 추가 적용 */}
         {activeTab === "realestate" && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in duration-500">
             <Card className="p-8">
@@ -508,12 +495,12 @@ export default function AssetMasterV2() {
           </div>
         )}
 
-        {/* TAB 6: TARGET SIMULATION */}
+        {/* 🎯 목표가 시뮬레이션 (클라우드 동기화 탭) */}
         {activeTab === "simulation" && (
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="bg-gradient-to-r from-indigo-900/30 to-purple-900/30 p-8 rounded-[40px] border border-indigo-500/20 shadow-xl flex flex-col md:flex-row justify-between items-center gap-6">
               <div>
-                <p className="text-indigo-400 text-[10px] font-black tracking-widest uppercase mb-2">목표 달성 시 주식 평가액</p>
+                <p className="text-indigo-400 text-[10px] font-black uppercase mb-2">목표 달성 시 주식 평가액</p>
                 <h2 className="text-4xl md:text-5xl font-black text-white">{fmt(simulationData.targetKrwTotal)}<span className="text-xl font-light ml-2 opacity-50">KRW</span></h2>
               </div>
               <div className="text-right">
@@ -559,12 +546,12 @@ export default function AssetMasterV2() {
                 </Card>
               ))}
             </div>
-            <p className="text-center text-slate-600 text-[10px] mt-4">💾 여러 계좌에 흩어진 동일 종목은 하나로 묶어 보여줍니다. 목표가는 브라우저에 자동 저장됩니다.</p>
+            <p className="text-center text-slate-600 text-[10px] mt-4">☁️ 이 데이터는 Vercel KV 클라우드에 안전하게 저장되어 모든 기기에서 동기화됩니다.</p>
           </div>
         )}
 
         <footer className="mt-20 py-8 border-t border-slate-900 text-center">
-          <p className="text-slate-700 text-[10px] font-black tracking-widest uppercase">Asset Master V3.1 · Powered by Google Sheets · LG MDI Accounting</p>
+          <p className="text-slate-700 text-[10px] font-black tracking-widest uppercase">Asset Master V3.5 · Powered by Vercel KV · LG MDI Accounting</p>
         </footer>
       </div>
     </div>
