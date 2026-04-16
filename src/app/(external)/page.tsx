@@ -6,10 +6,10 @@ import {
 } from "recharts";
 
 // ═══════════════════════════════════════════
-// ☁️ 클라우드 저장소(Vercel KV) 연결 정보
+// ☁️ 클라우드 저장소(Vercel KV) 연결 정보 (검증 완료)
 // ═══════════════════════════════════════════
 const KV_URL = "https://chief-jay-84148.upstash.io"; 
-const KV_TOKEN = "gQAAAAAAUUI0AAIncDE5MmI4ZmFkNGQwN2E0NTNmYjAwY2ExNGQ1YzI1MTI3OHAxODQxNDg";
+const KV_TOKEN = "gQAAAAAAAUi0AAIncDE5MmI4ZmFkNGQwN2E0NTNmYjAwY2ExNGQ1YzI1MTI3OHAxODQxNDg";
 
 const BASE_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOtqLayVYNftdkuatjh1_z-8xVj1EgYGRU3L5O_NAPjQDSVGlK/pub?";
 
@@ -21,6 +21,7 @@ const GIDS = {
   SAVINGS: "380349145" 
 };
 
+// Interface 정의
 interface Stock { market: string; account: string; name: string; qty: number; avg: number; current: number; dailyChange: number; }
 interface Asset { id: number; name: string; value: number; }
 interface Debt { id: number; name: string; value: number; }
@@ -38,6 +39,7 @@ const TABS: { key: TabKey; label: string; num: string }[] = [
   { key: "simulation", label: "🎯 목표가 시뮬레이션", num: "6" },
 ];
 
+// Utility 함수들
 const cleanNum = (val: unknown): number => {
   if (val == null || val === "") return 0;
   const cleaned = String(val).replace(/[^0-9.\-]+/g, "");
@@ -104,6 +106,7 @@ export default function AssetMasterV3_6() {
   
   const [targetPrices, setTargetPrices] = useState<Record<string, number>>({});
 
+  // ☁️ 데이터 로딩
   useEffect(() => {
     setIsClient(true);
     const loadCloudData = async () => {
@@ -120,6 +123,7 @@ export default function AssetMasterV3_6() {
     loadCloudData();
   }, []);
 
+  // ☁️ 데이터 저장
   const saveToCloud = async (newTargets: Record<string, number>) => {
     try {
       await fetch(`${KV_URL}/set/user_targets`, {
@@ -256,7 +260,7 @@ export default function AssetMasterV3_6() {
     return acc;
   }, [realized]);
 
-  // 🚨 목표가 시뮬레이터 연산 (종목 통합 + 최종 수익 계산)
+  // 시뮬레이션 연산 로직
   const simulationData = useMemo(() => {
     let currentKrwTotal = 0;
     let targetKrwTotal = 0;
@@ -268,18 +272,10 @@ export default function AssetMasterV3_6() {
       const isOS = s.market.includes("해외");
       const rate = isOS ? exchangeRate : 1;
       if (!aggMap[s.name]) {
-        aggMap[s.name] = { 
-          name: s.name, 
-          qty: 0, 
-          current: s.current, 
-          avg: 0, // 가중평균을 위해 아래에서 합산 후 계산
-          isOS, 
-          rate,
-          totalCost: 0 
-        };
+        aggMap[s.name] = { name: s.name, qty: 0, current: s.current, avg: 0, isOS, rate, totalCost: 0 };
       }
       aggMap[s.name].qty += s.qty;
-      aggMap[s.name].totalCost += (s.avg * s.qty * rate); // 환율 적용된 총 매수 비용
+      aggMap[s.name].totalCost += (s.avg * s.qty * rate);
     });
 
     const items = Object.values(aggMap).map(item => {
@@ -292,13 +288,11 @@ export default function AssetMasterV3_6() {
       targetKrwTotal += targetKrw;
 
       const diffPct = item.current > 0 ? ((target - item.current) / item.current) * 100 : 0;
-      const expectedExtraProfit = targetKrw - currentKrw;
-      
-      // 최종 수익 (목표 평가액 - 총 매수 원금)
+      const expectedProfit = targetKrw - currentKrw;
       const finalProfit = targetKrw - item.totalCost;
       const finalYield = item.totalCost > 0 ? (finalProfit / item.totalCost) * 100 : 0;
 
-      return { ...item, target, diffPct, expectedExtraProfit, finalProfit, finalYield, currentKrw, targetKrw };
+      return { ...item, target, diffPct, expectedProfit, finalProfit, finalYield, currentKrw, targetKrw };
     }).sort((a, b) => b.currentKrw - a.currentKrw);
 
     return { 
@@ -353,30 +347,6 @@ export default function AssetMasterV3_6() {
               <StatCard label="기타 자산" value={`${fmtShort(totalAssetsVal)}원`} />
               <StatCard label="예적금 현고" value={`${fmtShort(totalSavingsVal)}원`} />
               <StatCard label="부채 총계" value={`${fmtShort(totalDebtsVal)}원`} variant="danger" />
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Card className="p-6">
-                <p className="text-[10px] font-black text-slate-500 uppercase mb-4">자산 구성 비중</p>
-                <ResponsiveContainer width="100%" height={200}>
-                  <PieChart>
-                    <Pie data={compositionData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={3} strokeWidth={0}>
-                      {compositionData.map((d, i) => <Cell key={i} fill={d.color} />)}
-                    </Pie>
-                    <Tooltip content={<ChartTooltip />} />
-                    <Legend formatter={(val) => <span className="text-slate-400 text-xs">{val}</span>} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </Card>
-              <div className="bg-emerald-900/10 p-10 rounded-[50px] border border-emerald-900/30">
-                <div className="flex justify-between items-center mb-8 gap-4">
-                  <h3 className="text-xl font-black text-emerald-400 italic">Future Projection</h3>
-                  <input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} className="bg-slate-900 text-emerald-400 font-black p-3 rounded-2xl border border-emerald-900/50 outline-none" />
-                </div>
-                <div className="bg-slate-950/50 p-6 rounded-3xl text-center">
-                  <p className="text-[10px] text-slate-500 font-black uppercase mb-2">예상 미래 순자산</p>
-                  <p className="text-3xl font-black text-white">{fmt(projectedNetWorth)} 원</p>
-                </div>
-              </div>
             </div>
           </div>
         )}
@@ -434,58 +404,16 @@ export default function AssetMasterV3_6() {
 
         {activeTab === "realestate" && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in duration-500">
-            <Card className="p-8">
-              <h3 className="text-xl font-black text-white italic mb-6">Real Assets (Synced)</h3>
-              <div className="space-y-3">
-                {assets.map(a => (
-                  <div key={a.id} className="flex justify-between items-center bg-slate-950 p-4 rounded-2xl border border-slate-800">
-                    <span className="font-bold text-slate-300">{a.name}</span>
-                    <span className="font-black text-blue-400">{fmt(a.value)}원</span>
-                  </div>
-                ))}
-              </div>
-            </Card>
-            <Card className="p-8 border-rose-900/30 bg-rose-900/10">
-              <h3 className="text-xl font-black text-rose-400 italic mb-6">Liabilities (Synced)</h3>
-              <div className="space-y-3">
-                {debts.map(d => (
-                  <div key={d.id} className="flex justify-between items-center bg-slate-950 p-4 rounded-2xl border border-rose-900/20">
-                    <span className="font-bold text-slate-300">{d.name}</span>
-                    <span className="font-black text-rose-400">{fmt(d.value)}원</span>
-                  </div>
-                ))}
-              </div>
-            </Card>
+            <Card className="p-8"><h3 className="text-xl font-black text-white italic mb-6">Real Assets</h3><div className="space-y-3">{assets.map(a => (<div key={a.id} className="flex justify-between items-center bg-slate-950 p-4 rounded-2xl border border-slate-800"><span className="font-bold text-slate-300">{a.name}</span><span className="font-black text-blue-400">{fmt(a.value)}원</span></div>))}</div></Card>
+            <Card className="p-8 border-rose-900/30 bg-rose-900/10"><h3 className="text-xl font-black text-rose-400 italic mb-6">Liabilities</h3><div className="space-y-3">{debts.map(d => (<div key={d.id} className="flex justify-between items-center bg-slate-950 p-4 rounded-2xl border border-rose-900/20"><span className="font-bold text-slate-300">{d.name}</span><span className="font-black text-rose-400">{fmt(d.value)}원</span></div>))}</div></Card>
           </div>
         )}
 
         {activeTab === "savings" && (
           <div className="space-y-6 animate-in fade-in duration-500">
             {savings.map((s) => {
-              const maturity = new Date(s.maturityDate);
-              const now = new Date();
-              const mLeft = Math.max(0, (maturity.getFullYear() - now.getFullYear()) * 12 + (maturity.getMonth() - now.getMonth()));
-              const fPrincipal = s.current + s.monthly * mLeft;
-              const cInt = s.current * (s.interestRate / 100) * (mLeft / 12);
-              const fInt = (s.monthly * mLeft * (mLeft + 1)) / 2 * (s.interestRate / 100 / 12);
-              const fVal = fPrincipal + cInt + fInt;
-              return (
-                <Card key={s.id} className="p-6">
-                  <div className="flex justify-between items-center mb-4 border-b border-slate-800 pb-4">
-                    <h3 className="text-xl font-black text-white italic">{s.name}</h3>
-                    <span className="text-emerald-400 font-mono text-sm">만기까지 {mLeft}개월</span>
-                  </div>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-                    <div><p className="text-[10px] text-slate-500 uppercase">월 납입</p><p className="font-bold">{fmt(s.monthly)}원</p></div>
-                    <div><p className="text-[10px] text-slate-500 uppercase">현재 잔액</p><p className="font-bold">{fmt(s.current)}원</p></div>
-                    <div><p className="text-[10px] text-slate-500 uppercase">금리</p><p className="font-bold text-emerald-400">{s.interestRate}%</p></div>
-                    <div className="bg-emerald-900/10 p-4 rounded-2xl">
-                      <p className="text-[10px] text-emerald-400 uppercase font-black">만기 예상액</p>
-                      <p className="text-xl font-black">{fmt(fVal)}원</p>
-                    </div>
-                  </div>
-                </Card>
-              );
+              const maturity = new Date(s.maturityDate); const now = new Date(); const mLeft = Math.max(0, (maturity.getFullYear() - now.getFullYear()) * 12 + (maturity.getMonth() - now.getMonth())); const fPrincipal = s.current + s.monthly * mLeft; const cInt = s.current * (s.interestRate / 100) * (mLeft / 12); const fInt = (s.monthly * mLeft * (mLeft + 1)) / 2 * (s.interestRate / 100 / 12); const fVal = fPrincipal + cInt + fInt;
+              return (<Card key={s.id} className="p-6"><div className="flex justify-between items-center mb-4 border-b border-slate-800 pb-4"><h3 className="text-xl font-black text-white italic">{s.name}</h3><span className="text-emerald-400 font-mono text-sm">만기까지 {mLeft}개월</span></div><div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center"><div><p className="text-[10px] text-slate-500 uppercase">현재 잔액</p><p className="font-bold">{fmt(s.current)}원</p></div><div><p className="text-[10px] text-slate-500 uppercase">금리</p><p className="font-bold text-emerald-400">{s.interestRate}%</p></div><div className="bg-emerald-900/10 p-4 rounded-2xl md:col-span-2"><p className="text-[10px] text-emerald-400 uppercase font-black">만기 예상액</p><p className="text-xl font-black">{fmt(fVal)}원</p></div></div></Card>);
             })}
           </div>
         )}
@@ -494,33 +422,13 @@ export default function AssetMasterV3_6() {
           <div className="space-y-6 animate-in fade-in duration-500">
             {Object.keys(realizedGrouped).map((m) => (
               <Card key={m} className="overflow-hidden">
-                <div className="px-8 py-5 bg-slate-800/40 flex justify-between items-center border-b border-slate-800">
-                  <span className="font-black text-slate-300">{m} 결산 소계</span>
-                  <span className={`font-black text-lg ${pctColor(realizedGrouped[m].sub)}`}>{pctSign(realizedGrouped[m].sub)}{fmt(realizedGrouped[m].sub)} 원</span>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left">
-                    <tbody className="divide-y divide-slate-800">
-                      {realizedGrouped[m].items.map((r, i) => (
-                        <tr key={i} className="hover:bg-white/[0.02]">
-                          <td className="px-8 py-4 text-xs text-slate-500 font-mono">{r.date}</td>
-                          <td className="px-8 py-4 font-bold text-slate-200">
-                            {r.name}
-                            <span className="ml-2 text-xs text-slate-400">({fmt(r.qty)}주)</span>
-                            <span className="ml-2 text-[10px] text-slate-600 font-normal">{r.note}</span>
-                          </td>
-                          <td className={`px-8 py-4 text-right font-black ${pctColor(r.profit)}`}>{pctSign(r.profit)}{fmt(r.profit)}원</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <div className="px-8 py-5 bg-slate-800/40 flex justify-between items-center border-b border-slate-800"><span className="font-black text-slate-300">{m} 결산 소계</span><span className={`font-black text-lg ${pctColor(realizedGrouped[m].sub)}`}>{pctSign(realizedGrouped[m].sub)}{fmt(realizedGrouped[m].sub)} 원</span></div>
+                <div className="overflow-x-auto"><table className="w-full text-left"><tbody className="divide-y divide-slate-800">{realizedGrouped[m].items.map((r, i) => (<tr key={i} className="hover:bg-white/[0.02]"><td className="px-8 py-4 text-xs text-slate-500 font-mono">{r.date}</td><td className="px-8 py-4 font-bold text-slate-200">{r.name}<span className="ml-2 text-xs text-slate-400">({fmt(r.qty)}주)</span></td><td className={`px-8 py-4 text-right font-black ${pctColor(r.profit)}`}>{pctSign(r.profit)}{fmt(r.profit)}원</td></tr>))}</tbody></table></div>
               </Card>
             ))}
           </div>
         )}
 
-        {/* 🎯 목표가 시뮬레이션 V3.6 (최종 수익 로직 추가) */}
         {activeTab === "simulation" && (
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -542,7 +450,7 @@ export default function AssetMasterV3_6() {
                   <div className="flex justify-between items-start">
                     <div>
                       <h3 className="text-lg font-black text-white">{item.name}</h3>
-                      <p className="text-xs text-slate-500 mt-1">보유: {fmt(item.qty)}주 | 현재가: {item.isOS ? `$${fmtDecimal(item.current)}` : `${fmt(item.current)}원`}</p>
+                      <p className="text-xs text-slate-500 mt-1">현재가: {item.isOS ? `$${fmtDecimal(item.current)}` : `${fmt(item.current)}원`}</p>
                     </div>
                     <div className="text-right">
                       <p className="text-[10px] text-slate-500 font-black uppercase mb-1">목표가 {item.isOS ? "(USD)" : "(KRW)"}</p>
@@ -555,7 +463,6 @@ export default function AssetMasterV3_6() {
                       />
                     </div>
                   </div>
-                  
                   <div className="grid grid-cols-2 gap-3">
                     <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
                       <p className="text-[10px] text-slate-500 uppercase mb-1">상승 여력</p>
@@ -570,25 +477,20 @@ export default function AssetMasterV3_6() {
                       </p>
                     </div>
                   </div>
-
                   <div className="bg-indigo-900/10 p-5 rounded-2xl border border-indigo-500/20 flex justify-between items-center">
                     <div>
-                      <p className="text-[10px] text-indigo-400 font-black uppercase">목표가 달성 시 최종 수익</p>
-                      <p className={`text-xl font-black ${pctColor(item.finalProfit)}`}>
-                        {pctSign(item.finalProfit)}{fmt(item.finalProfit)} 원
-                      </p>
+                      <p className="text-[10px] text-indigo-400 font-black uppercase">목표 달성 시 최종 수익</p>
+                      <p className={`text-xl font-black ${pctColor(item.finalProfit)}`}>{pctSign(item.finalProfit)}{fmt(item.finalProfit)} 원</p>
                     </div>
                     <div className="text-right">
                       <p className="text-[10px] text-indigo-400 font-black uppercase">예상 수익률</p>
-                      <p className={`text-xl font-black ${pctColor(item.finalYield)}`}>
-                        {pctSign(item.finalYield)}{item.finalYield.toFixed(1)}%
-                      </p>
+                      <p className={`text-xl font-black ${pctColor(item.finalYield)}`}>{pctSign(item.finalYield)}{item.finalYield.toFixed(1)}%</p>
                     </div>
                   </div>
                 </Card>
               ))}
             </div>
-            <p className="text-center text-slate-600 text-[10px] mt-4">💰 최종 수익은 여러 계좌의 평단가를 가중평균하여 산출한 매수 원금 대비 결과입니다.</p>
+            <p className="text-center text-slate-600 text-[10px] mt-4">☁️ 이 데이터는 Vercel KV 클라우드에 안전하게 저장됩니다.</p>
           </div>
         )}
 
