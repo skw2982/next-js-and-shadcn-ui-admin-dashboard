@@ -12,11 +12,11 @@ import {
 const BASE_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOtqLayVYNftdkuatjh1_z-8xVj1EgYGRU3L5O_NAPjQDSVGlK/pub?";
 
 const GIDS = {
-  STOCKS: "0",          // 2번 탭: 주식 현황
-  REALIZED: "817751922",   // 5번 탭: 실현 손익
-  ASSETS: "1398634207", // 3번 탭: 실물자산 GID
-  DEBTS: "359303564",  // 3번 탭: 부채 GID
-  SAVINGS: "380349145" // 4번 탭: 예적금 GID
+  STOCKS: "0",          
+  REALIZED: "817751922",   
+  ASSETS: "1398634207", 
+  DEBTS: "359303564",  
+  SAVINGS: "380349145" 
 };
 
 // ═══════════════════════════════════════════
@@ -205,6 +205,7 @@ export default function AssetMasterV2() {
     ].filter((d) => d.value > 0);
   }, [totalStockVal, totalAssetsVal, totalSavingsVal]);
 
+  // 🚨 [수정됨] 미래 자산 시뮬레이터 이자 로직 완벽 반영
   const projectedNetWorth = useMemo(() => {
     const target = new Date(targetDate);
     const now = new Date();
@@ -212,10 +213,13 @@ export default function AssetMasterV2() {
       const maturity = new Date(s.maturityDate || targetDate);
       const end = target > maturity ? maturity : target;
       if (end <= now) return acc + s.current;
-      const months = (end.getFullYear() - now.getFullYear()) * 12 + (end.getMonth() - now.getMonth());
-      const principal = s.current + s.monthly * Math.max(0, months);
-      const interest = (s.monthly * months * (months + 1)) / 2 * (s.interestRate / 100 / 12);
-      return acc + principal + interest;
+      const months = Math.max(0, (end.getFullYear() - now.getFullYear()) * 12 + (end.getMonth() - now.getMonth()));
+      
+      const principal = s.current + s.monthly * months;
+      const currentBalanceInterest = s.current * (s.interestRate / 100) * (months / 12);
+      const futureDepositsInterest = (s.monthly * months * (months + 1)) / 2 * (s.interestRate / 100 / 12);
+      
+      return acc + principal + currentBalanceInterest + futureDepositsInterest;
     }, 0);
     return totalStockVal + totalAssetsVal + projectedSavings - totalDebtsVal;
   }, [targetDate, savings, totalStockVal, totalAssetsVal, totalDebtsVal]);
@@ -238,7 +242,6 @@ export default function AssetMasterV2() {
   return (
     <div className="min-h-screen bg-[#0c0e12] text-slate-200 p-4 md:p-8 font-sans selection:bg-blue-500/30">
       <div className="max-w-5xl mx-auto">
-        {/* Header */}
         <header className="mb-8 flex flex-wrap justify-between items-end border-b border-slate-800 pb-6 gap-4">
           <div>
             <h1 className="text-4xl font-black text-white italic tracking-tighter">ASSET MASTER V2</h1>
@@ -251,7 +254,6 @@ export default function AssetMasterV2() {
           </div>
         </header>
 
-        {/* Tabs */}
         <nav className="flex gap-2 mb-10 overflow-x-auto pb-2 scrollbar-hide">
           {TABS.map((t) => (
             <button key={t.key} onClick={() => setActiveTab(t.key)} className={`px-6 py-3 rounded-2xl font-black text-[10px] tracking-widest uppercase transition-all whitespace-nowrap ${activeTab === t.key ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" : "bg-slate-900 text-slate-500 hover:text-slate-300 hover:bg-slate-800"}`}>
@@ -381,9 +383,15 @@ export default function AssetMasterV2() {
               const maturity = new Date(s.maturityDate);
               const now = new Date();
               const mLeft = Math.max(0, (maturity.getFullYear() - now.getFullYear()) * 12 + (maturity.getMonth() - now.getMonth()));
+              
               const fPrincipal = s.current + s.monthly * mLeft;
-              const fInterest = (s.monthly * mLeft * (mLeft + 1)) / 2 * (s.interestRate / 100 / 12);
+              // 🚨 [수정됨] 예적금 탭 이자 로직 완벽 반영
+              const currentBalanceInterest = s.current * (s.interestRate / 100) * (mLeft / 12);
+              const futureDepositsInterest = (s.monthly * mLeft * (mLeft + 1)) / 2 * (s.interestRate / 100 / 12);
+              const fInterest = currentBalanceInterest + futureDepositsInterest;
+              
               const fVal = fPrincipal + fInterest;
+
               return (
                 <Card key={s.id} className="p-6">
                   <div className="flex justify-between items-center mb-4 border-b border-slate-800 pb-4">
