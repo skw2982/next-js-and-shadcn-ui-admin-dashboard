@@ -56,7 +56,6 @@ const fmtDecimal = (num: number): string => {
   return num.toLocaleString("ko-KR", { maximumFractionDigits: 2 });
 };
 
-// [🚨 콤마 해결] 2136만 -> 2,136만
 const fmtShort = (n: number): string => {
   const abs = Math.abs(n);
   if (abs >= 1e8) return (n / 1e8).toFixed(1) + "억";
@@ -101,7 +100,7 @@ const ChartTooltip = ({ active, payload }: { active?: boolean; payload?: any[] }
   );
 };
 
-export default function AssetMasterV3_8() {
+export default function AssetMasterV3_9() {
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [isClient, setIsClient] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -240,11 +239,16 @@ export default function AssetMasterV3_8() {
       <div className="max-w-5xl mx-auto relative">
         <header className="mb-8 flex flex-wrap justify-between items-end border-b border-slate-800 pb-6 gap-4">
           <div>
-            <h1 className="text-4xl font-black text-white italic tracking-tighter">ASSET MASTER <span className="text-blue-500">V3.8</span></h1>
+            <h1 className="text-4xl font-black text-white italic tracking-tighter">ASSET MASTER <span className="text-blue-500">V3.9</span></h1>
             <p className="text-slate-500 text-[10px] font-bold tracking-[0.3em] uppercase mt-1">LG MDI Accounting · {lastUpdated}</p>
           </div>
           <div className="flex items-center gap-3">
-            <button onClick={fetchAllData} className="text-[10px] px-4 py-2 rounded-xl font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all">↻ REFRESH</button>
+            <button 
+              onClick={fetchAllData} 
+              className="text-[10px] px-4 py-2 rounded-xl font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all flex items-center gap-2"
+            >
+              <span className={loading ? "animate-spin" : ""}>↻</span> {loading ? "SYNCING..." : "REFRESH"}
+            </button>
             <div className="text-[10px] text-amber-400 font-mono bg-amber-500/10 px-4 py-2 rounded-2xl border border-amber-500/20 font-bold">USD/KRW: {fmtDecimal(exchangeRate)}</div>
           </div>
         </header>
@@ -280,40 +284,58 @@ export default function AssetMasterV3_8() {
           </div>
         )}
 
-        {/* 탭 2: 주식 */}
+        {/* 탭 2: 계좌별 주식 (수익 이원화 패치) */}
         {activeTab === "stocks" && (
           <div className="space-y-6 animate-in fade-in duration-500">
             {Object.keys(grouped).map((acc) => (
               <Card key={acc} className="overflow-hidden">
-                <div className="px-6 py-5 bg-slate-800/40 border-b border-slate-800 flex justify-between items-center">
-                  <span className="font-black text-white italic text-lg">💳 {acc}</span>
+                <div className="px-6 py-5 bg-slate-800/40 border-b border-slate-800 flex justify-between items-center flex-wrap gap-4">
+                  <div className="flex items-center gap-4">
+                    <div className="flex flex-col">
+                      <span className="font-black text-white italic text-lg tracking-tight">💳 {acc}</span>
+                      <span className={`text-[10px] font-black px-2 py-1 rounded-lg mt-1 w-fit ${grouped[acc].dailyProfit >= 0 ? "bg-rose-500/10 text-rose-400" : "bg-blue-500/10 text-blue-400"}`}>
+                        오늘 {pctSign(grouped[acc].dailyProfit)}{fmt(grouped[acc].dailyProfit)}원
+                      </span>
+                    </div>
+                  </div>
                   <div className="text-right">
-                    <div className="text-white font-black">{fmt(grouped[acc].total)}원</div>
-                    <div className={`text-[10px] font-bold ${pctColor(grouped[acc].profit)}`}>누적 {pctSign(grouped[acc].profit)}{fmt(grouped[acc].profit)}원</div>
+                    <div className="text-[10px] text-slate-500 font-black uppercase mb-1">Total Valuation</div>
+                    <div className="text-white font-black text-xl leading-none">{fmt(grouped[acc].total)}원</div>
+                    <div className={`text-xs font-bold mt-1 ${pctColor(grouped[acc].profit)}`}>
+                      총 누적 {pctSign(grouped[acc].profit)}{fmt(grouped[acc].profit)}원 ({((grouped[acc].total / grouped[acc].invested - 1) * 100).toFixed(1)}%)
+                    </div>
                   </div>
                 </div>
-                <table className="w-full text-left text-sm">
-                  <tbody className="divide-y divide-slate-800/60">
-                    {grouped[acc].items.map((s, i) => (
-                      <tr key={i} className="hover:bg-white/[0.02]">
-                        <td className="px-6 py-4 font-bold text-slate-200">
-                          <span className="text-[10px] text-blue-400 mr-2 uppercase">{s.market.includes("해외") ? "US" : "KR"}</span>{s.name}
-                          <div className="text-[10px] text-slate-600">{s.qty}주 · 평단 {s.market.includes("해외") ? `$${s.avg}` : fmt(s.avg)}</div>
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          <div className={`font-black ${pctColor(s.dailyChange)}`}>{pctSign(s.dailyChange)}{fmt(s.dailyChange * (s.market.includes("해외") ? exchangeRate : 1) * s.qty)}원</div>
-                          <div className="text-[10px] opacity-60">수익률 {((s.current/s.avg - 1)*100).toFixed(1)}%</div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <tbody className="divide-y divide-slate-800/60">
+                      {grouped[acc].items.map((s, i) => {
+                        const isOS = s.market.includes("해외"); const rate = isOS ? exchangeRate : 1; const profKrw = (s.current - s.avg) * rate * s.qty;
+                        return (
+                          <tr key={i} className="hover:bg-white/[0.02] transition-colors">
+                            <td className="px-6 py-4 font-bold text-slate-200">
+                              <div className="flex items-center gap-2">
+                                <span className={`text-[9px] px-1.5 py-0.5 rounded font-black ${isOS ? "bg-amber-500/20 text-amber-400" : "bg-blue-500/20 text-blue-400"}`}>{isOS ? "US" : "KR"}</span>
+                                <span>{s.name}</span>
+                              </div>
+                              <div className="text-[10px] text-slate-600 mt-1">{s.qty.toLocaleString()}주 · 평단 {isOS ? `$${s.avg}` : fmt(s.avg)}</div>
+                            </td>
+                            <td className="px-6 py-4 text-right">
+                              <div className={`text-sm font-black ${pctColor(s.dailyChange)}`}>{pctSign(s.dailyChange)}{fmt(s.dailyChange * rate * s.qty)}원</div>
+                              <div className={`text-[10px] mt-0.5 ${pctColor(profKrw)} opacity-70`}>{pctSign(profKrw)}{fmt(profKrw)}원 ({((s.current/s.avg - 1)*100).toFixed(1)}%)</div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </Card>
             ))}
           </div>
         )}
 
-        {/* 탭 3: 실물 / 부채 */}
+        {/* 탭 3, 4, 5, 6 본문 (생략 없이 유지) */}
         {activeTab === "realestate" && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in duration-500">
             <Card className="p-8">
@@ -341,7 +363,6 @@ export default function AssetMasterV3_8() {
           </div>
         )}
 
-        {/* 탭 4: 예적금 */}
         {activeTab === "savings" && (
           <div className="space-y-6 animate-in fade-in duration-500">
             {savings.map((s) => {
@@ -371,7 +392,6 @@ export default function AssetMasterV3_8() {
           </div>
         )}
 
-        {/* 탭 5: 실현 손익 */}
         {activeTab === "realized" && (
           <div className="space-y-6 animate-in fade-in duration-500">
             {Object.keys(realizedGrouped).map((m) => (
@@ -396,7 +416,6 @@ export default function AssetMasterV3_8() {
           </div>
         )}
 
-        {/* 탭 6: 시뮬레이션 */}
         {activeTab === "simulation" && (
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -435,7 +454,7 @@ export default function AssetMasterV3_8() {
         )}
 
         <footer className="mt-20 py-8 border-t border-slate-900 text-center">
-          <p className="text-slate-800 text-[10px] font-black tracking-widest uppercase italic">LG MDI Accounting Dept · Asset Master Full V3.8</p>
+          <p className="text-slate-800 text-[10px] font-black tracking-widest uppercase italic">LG MDI Accounting Dept · Asset Master Full V3.9</p>
         </footer>
       </div>
     </div>
