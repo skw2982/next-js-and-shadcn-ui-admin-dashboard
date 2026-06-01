@@ -172,10 +172,16 @@ export default function AssetMasterV3_9() {
       const isOS = s.market.includes("해외"); const rate = isOS ? exchangeRate : 1;
       if (!acc[s.account]) acc[s.account] = { items: [], total: 0, profit: 0, invested: 0, dailyProfit: 0 };
       acc[s.account].items.push(s);
-      acc[s.account].total += s.current * rate * s.qty;
-      acc[s.account].invested += s.avg * rate * s.qty;
-      acc[s.account].profit += (s.current - s.avg) * rate * s.qty;
-      acc[s.account].dailyProfit += s.dailyChange * rate * s.qty;
+      
+      // 예수금은 매입가/이익 계산에서 제외하고 총 자산에만 더함
+      if (s.name.includes("예수금")) {
+        acc[s.account].total += s.current * rate * s.qty;
+      } else {
+        acc[s.account].total += s.current * rate * s.qty;
+        acc[s.account].invested += s.avg * rate * s.qty;
+        acc[s.account].profit += (s.current - s.avg) * rate * s.qty;
+        acc[s.account].dailyProfit += s.dailyChange * rate * s.qty;
+      }
     });
     return acc;
   }, [stocks, exchangeRate]);
@@ -204,6 +210,21 @@ export default function AssetMasterV3_9() {
     return totalStockVal + totalAssetsVal + ps - totalDebtsVal;
   }, [targetDate, savings, totalStockVal, totalAssetsVal, totalDebtsVal]);
 
+  // 실현손익 총 누계
+  const totalRealizedProfit = useMemo(() => realized.reduce((acc, r) => acc + r.profit, 0), [realized]);
+  
+  // 실현손익 연도별 통계
+  const realizedYearly = useMemo(() => {
+    const acc: Record<string, number> = {};
+    realized.forEach((r) => {
+      const y = r.date.substring(0, 4);
+      if (!acc[y]) acc[y] = 0;
+      acc[y] += r.profit;
+    });
+    return Object.entries(acc).sort((a, b) => Number(b[0]) - Number(a[0]));
+  }, [realized]);
+
+  // 실현손익 월별 그룹핑
   const realizedGrouped = useMemo(() => {
     const sorted = [...realized].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     const acc: Record<string, { items: Realized[]; sub: number }> = {};
@@ -215,6 +236,7 @@ export default function AssetMasterV3_9() {
     let currentKrwTotal = 0; let targetKrwTotal = 0; let totalCostKrw = 0;
     const aggMap: Record<string, { name: string; qty: number; current: number; avg: number; isOS: boolean; rate: number; totalCost: number; }> = {};
     stocks.forEach(s => {
+      if (s.name.includes("예수금")) return; // 시뮬레이션에서 예수금 제외
       const isOS = s.market.includes("해외"); const rate = isOS ? exchangeRate : 1;
       if (!aggMap[s.name]) { aggMap[s.name] = { name: s.name, qty: 0, current: s.current, avg: 0, isOS, rate, totalCost: 0 }; }
       aggMap[s.name].qty += s.qty; aggMap[s.name].totalCost += (s.avg * s.qty * rate);
@@ -284,7 +306,7 @@ export default function AssetMasterV3_9() {
           </div>
         )}
 
-        {/* 탭 2: 계좌별 주식 (수익 이원화 패치) */}
+        {/* 탭 2: 계좌별 주식 (예수금 분리 패치) */}
         {activeTab === "stocks" && (
           <div className="space-y-6 animate-in fade-in duration-500">
             {Object.keys(grouped).map((acc) => (
@@ -301,16 +323,41 @@ export default function AssetMasterV3_9() {
                   <div className="text-right">
                     <div className="text-[10px] text-slate-500 font-black uppercase mb-1">Total Valuation</div>
                     <div className="text-white font-black text-xl leading-none">{fmt(grouped[acc].total)}원</div>
-                    <div className={`text-xs font-bold mt-1 ${pctColor(grouped[acc].profit)}`}>
-                      총 누적 {pctSign(grouped[acc].profit)}{fmt(grouped[acc].profit)}원 ({((grouped[acc].total / grouped[acc].invested - 1) * 100).toFixed(1)}%)
-                    </div>
+                    {grouped[acc].invested > 0 && (
+                      <div className={`text-xs font-bold mt-1 ${pctColor(grouped[acc].profit)}`}>
+                        총 누적 {pctSign(grouped[acc].profit)}{fmt(grouped[acc].profit)}원 ({((grouped[acc].total / grouped[acc].invested - 1) * 100).toFixed(1)}%)
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-sm">
                     <tbody className="divide-y divide-slate-800/60">
                       {grouped[acc].items.map((s, i) => {
-                        const isOS = s.market.includes("해외"); const rate = isOS ? exchangeRate : 1; const profKrw = (s.current - s.avg) * rate * s.qty;
+                        const isCash = s.name.includes("예수금");
+                        const isOS = s.market.includes("해외"); 
+                        const rate = isOS ? exchangeRate : 1; 
+                        
+                        // 예수금 렌더링
+                        if (isCash) {
+                          const cashAmt = s.current * rate * s.qty;
+                          return (
+                            <tr key={i} className="hover:bg-emerald-950/20 transition-colors bg-emerald-950/10">
+                              <td className="px-6 py-4 font-bold text-slate-200">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[11px] px-1.5 py-0.5 rounded font-black bg-emerald-500/20 text-emerald-400">💵</span>
+                                  <span className="text-emerald-300">{s.name}</span>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4 text-right">
+                                <div className="text-sm font-black text-emerald-400">{fmt(cashAmt)}원</div>
+                              </td>
+                            </tr>
+                          );
+                        }
+
+                        // 일반 주식 렌더링
+                        const profKrw = (s.current - s.avg) * rate * s.qty;
                         return (
                           <tr key={i} className="hover:bg-white/[0.02] transition-colors">
                             <td className="px-6 py-4 font-bold text-slate-200">
@@ -335,7 +382,7 @@ export default function AssetMasterV3_9() {
           </div>
         )}
 
-        {/* 탭 3, 4, 5, 6 본문 (생략 없이 유지) */}
+        {/* 탭 3: 실물/부채 */}
         {activeTab === "realestate" && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in duration-500">
             <Card className="p-8">
@@ -363,6 +410,7 @@ export default function AssetMasterV3_9() {
           </div>
         )}
 
+        {/* 탭 4: 예적금 */}
         {activeTab === "savings" && (
           <div className="space-y-6 animate-in fade-in duration-500">
             {savings.map((s) => {
@@ -392,8 +440,32 @@ export default function AssetMasterV3_9() {
           </div>
         )}
 
+        {/* 탭 5: 실현 손익 (총 누계 및 연도별 추가) */}
         {activeTab === "realized" && (
           <div className="space-y-6 animate-in fade-in duration-500">
+            
+            {/* 총 누적 통계 */}
+            <div className="bg-gradient-to-r from-amber-900/30 to-rose-900/30 p-8 rounded-[40px] border border-amber-500/20 shadow-xl">
+              <p className="text-amber-400 text-[10px] font-black uppercase mb-2 tracking-widest">총 누적 실현손익</p>
+              <h2 className={`text-4xl md:text-5xl font-black ${pctColor(totalRealizedProfit)}`}>
+                {pctSign(totalRealizedProfit)}{fmt(totalRealizedProfit)} 원
+              </h2>
+            </div>
+
+            {/* 연도별 통계 카드 */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {realizedYearly.map(([year, profit]) => (
+                <StatCard 
+                  key={year} 
+                  label={`${year}년 누계`} 
+                  value={`${pctSign(profit)}${fmt(profit)}원`} 
+                  variant={profit >= 0 ? "success" : "danger"} 
+                  icon="📅" 
+                />
+              ))}
+            </div>
+
+            {/* 기존 월별 리스트 */}
             {Object.keys(realizedGrouped).map((m) => (
               <Card key={m} className="overflow-hidden">
                 <div className="px-6 py-4 bg-slate-800/40 flex justify-between items-center border-b border-slate-800">
@@ -416,6 +488,7 @@ export default function AssetMasterV3_9() {
           </div>
         )}
 
+        {/* 탭 6: 목표가 시뮬레이션 */}
         {activeTab === "simulation" && (
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
