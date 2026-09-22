@@ -1,535 +1,2322 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
-  PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend,
-  BarChart, Bar, XAxis, YAxis
-} from "recharts";
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { ReactNode } from "react";
 
-// ═══════════════════════════════════════════
-// ☁️ Config & Connect (Vercel KV)
-// ═══════════════════════════════════════════
-const KV_URL = "https://chief-jay-84148.upstash.io"; 
-const KV_TOKEN = "gQAAAAAAAUi0AAIncDE5MmI4ZmFkNGQwN2E0NTNmYjAwY2ExNGQ1YzI1MTI3OHAxODQxNDg";
-
-const BASE_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOtqLayVYNftdkuatjh1_z-8xVj1EgYGRU3L5O_NAPjQDSVGlK/pub?";
-
-const GIDS = {
-  STOCKS: "0",
-  REALIZED: "817751922",
-  ASSETS: "1398634207",
-  DEBTS: "359303564",
-  SAVINGS: "380349145",
+// I열이 전일 종가이면 "previousClose"로 바꾸세요.
+// I열이 주당 전일 대비 증감액이면 "change" 그대로 사용합니다.
+const CONFIG: {
+  dailyKind: "change" | "previousClose";
+  overseasCash: "KRW" | "USD";
+} = {
+  dailyKind: "change",
+  overseasCash: "USD",
 };
 
-// Types
-interface Stock { market: string; account: string; name: string; qty: number; avg: number; current: number; dailyChange: number; }
-interface Asset { id: number; name: string; value: number; }
-interface Debt { id: number; name: string; value: number; }
-interface Saving { id: number; name: string; monthly: number; current: number; maturityDate: string; transferDay: number; interestRate: number; }
-interface Realized { date: string; name: string; qty: number; profit: number; yieldRate: number; note: string; }
+const CSV_URL =
+  "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtkGA-97rU-gqeH6rjf2loe8L1GoKOtqLayVYNftdkuatjh1_z-8xVj1EgYGRU3L5O_NAPjQDSVGlK/pub";
 
-type TabKey = "overview" | "stocks" | "realestate" | "savings" | "realized" | "simulation";
-
-const TABS: { key: TabKey; label: string; num: string; icon: string }[] = [
-  { key: "overview", label: "통합 요약", num: "1", icon: "📊" },
-  { key: "stocks", label: "계좌별 주식", num: "2", icon: "💳" },
-  { key: "realestate", label: "실물 / 부채", num: "3", icon: "🏠" },
-  { key: "savings", label: "예적금", num: "4", icon: "🏦" },
-  { key: "realized", label: "실현 손익", num: "5", icon: "💰" },
-  { key: "simulation", label: "목표가 시뮬", num: "6", icon: "🎯" },
+const GIDS = [
+  "0",
+  "817751922",
+  "1398634207",
+  "359303564",
+  "380349145",
 ];
 
-const ACCOUNT_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ec4899", "#06b6d4", "#8b5cf6", "#ef4444", "#f97316"];
+const API = "/api/asset-targets";
 
-// Utilities
-const cleanNum = (val: unknown): number => {
-  if (val == null || val === "") return 0;
-  const cleaned = String(val).replace(/[^0-9.\-]+/g, "");
-  const n = parseFloat(cleaned);
-  return isNaN(n) ? 0 : n;
+const TABS = [
+  "통합 요약",
+  "계좌별 주식",
+  "실물 / 부채",
+  "예적금",
+  "실현 손익",
+  "목표가 시뮬",
+];
+
+type Stock = {
+  id: string;
+  name: string;
+  account: string;
+  currency: string;
+  cash: boolean;
+  qty: number;
+  avg: number;
+  current: number;
+  change: number;
 };
 
-const fmt = (num: number): string => Math.round(num).toLocaleString("ko-KR");
-const fmtDecimal = (num: number): string => {
-  if (!num) return "0";
-  return num.toLocaleString("ko-KR", { maximumFractionDigits: 2 });
+type Asset = {
+  name: string;
+  value: number;
 };
 
-const fmtShort = (n: number): string => {
-  const abs = Math.abs(n);
-  if (abs >= 1e8) return (n / 1e8).toFixed(1) + "억";
-  if (abs >= 1e4) return Math.round(n / 1e4).toLocaleString("ko-KR") + "만";
-  return fmt(n);
+type Saving = {
+  name: string;
+  monthly: number;
+  current: number;
+  maturity: string;
+  day: number;
+  rate: number;
 };
 
-const pctColor = (v: number) => (v >= 0 ? "text-rose-400" : "text-blue-400");
-const pctSign = (v: number) => (v >= 0 ? "+" : "");
+type Realized = {
+  date: string;
+  name: string;
+  profit: number;
+  note: string;
+};
 
-// Components
-function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <div className={`bg-slate-900/80 backdrop-blur rounded-[28px] border border-slate-800/80 shadow-xl ${className}`}>{children}</div>;
+type Data = {
+  stocks: Stock[];
+  assets: Asset[];
+  debts: Asset[];
+  savings: Saving[];
+  realized: Realized[];
+  rate: number | null;
+  rateDate: string;
+  updated: string;
+  warnings: string[];
+};
+
+type Saved = {
+  version: number;
+  prices: Record<string, number>;
+};
+
+const fmt = (n: number) =>
+  n.toLocaleString("ko-KR", {
+    maximumFractionDigits: 0,
+  });
+
+const dec = (n: number) =>
+  n.toLocaleString("ko-KR", {
+    maximumFractionDigits: 4,
+  });
+
+const sign = (n: number) =>
+  `${n > 0 ? "+" : ""}${fmt(n)}`;
+
+const tone = (n: number) =>
+  n > 0 ? "up" : n < 0 ? "down" : "muted";
+
+const time = (s: string) =>
+  new Date(s).toLocaleString("ko-KR", {
+    timeZone: "Asia/Seoul",
+  });
+
+const today = () =>
+  new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+
+function num(
+  raw: string | undefined,
+  label: string,
+  optional = false,
+) {
+  let s = (raw || "").trim();
+
+  if (!s && optional) return 0;
+
+  if (/^\(.*\)$/.test(s)) {
+    s = `-${s.slice(1, -1)}`;
+  }
+
+  s = s
+    .replace(/[₩$,%\s원]/g, "")
+    .replace(/−/g, "-");
+
+  if (
+    !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(s) ||
+    !Number.isFinite(Number(s))
+  ) {
+    throw new Error(
+      `${label}: 숫자나 시트 수식 오류를 확인해주세요.`,
+    );
+  }
+
+  return Number(s);
 }
 
-function StatCard({ label, value, sub, variant = "default", icon }: { label: string; value: string; sub?: string; variant?: "default" | "danger" | "success" | "warning"; icon?: string; }) {
-  const styles = {
-    default: "bg-slate-900/80 border-slate-800 text-white",
-    danger: "bg-gradient-to-br from-rose-950/40 to-slate-900 border-rose-900/50 text-rose-300",
-    success: "bg-gradient-to-br from-emerald-950/40 to-slate-900 border-emerald-900/50 text-emerald-300",
-    warning: "bg-gradient-to-br from-amber-950/40 to-slate-900 border-amber-900/50 text-amber-300",
+function date(raw: string) {
+  const m = raw
+    .trim()
+    .match(
+      /^(\d{4})[-/.]\s*(\d{1,2})[-/.]\s*(\d{1,2})\.?$/,
+    );
+
+  if (!m) {
+    throw new Error(
+      `날짜 형식 오류: ${raw || "빈칸"}`,
+    );
+  }
+
+  const [, y, mo, d] = m;
+  const v = new Date(
+    Date.UTC(+y, +mo - 1, +d),
+  );
+
+  if (
+    v.getUTCFullYear() !== +y ||
+    v.getUTCMonth() !== +mo - 1 ||
+    v.getUTCDate() !== +d
+  ) {
+    throw new Error(
+      `존재하지 않는 날짜: ${raw}`,
+    );
+  }
+
+  return `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
+}
+
+function csv(
+  text: string,
+  columns: number,
+  label: string,
+) {
+  if (text.trimStart().startsWith("<")) {
+    throw new Error(
+      `${label}: 시트가 CSV로 반환되지 않았습니다.`,
+    );
+  }
+
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+  let closed = false;
+
+  const endCell = () => {
+    row.push(cell.trim());
+    cell = "";
+    closed = false;
   };
+
+  const endRow = () => {
+    endCell();
+    if (row.some(Boolean)) rows.push(row);
+    row = [];
+  };
+
+  text = text.replace(/^\uFEFF/, "");
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') {
+        cell += '"';
+        i++;
+      } else if (c === '"') {
+        quoted = false;
+        closed = true;
+      } else {
+        cell += c;
+      }
+    } else if (c === ",") {
+      endCell();
+    } else if (c === "\n" || c === "\r") {
+      if (
+        c === "\r" &&
+        text[i + 1] === "\n"
+      ) {
+        i++;
+      }
+
+      endRow();
+    } else if (
+      c === '"' &&
+      !cell.trim() &&
+      !closed
+    ) {
+      quoted = true;
+      cell = "";
+    } else if (
+      c === '"' ||
+      (closed && c.trim())
+    ) {
+      throw new Error(
+        `${label}: CSV 따옴표 형식 오류`,
+      );
+    } else {
+      cell += c;
+    }
+  }
+
+  if (quoted) {
+    throw new Error(
+      `${label}: CSV 따옴표가 닫히지 않았습니다.`,
+    );
+  }
+
+  if (cell || row.length || closed) {
+    endRow();
+  }
+
+  if (
+    !rows.length ||
+    rows[0].length < columns
+  ) {
+    throw new Error(
+      `${label}: 첫 행의 헤더와 열 개수를 확인해주세요.`,
+    );
+  }
+
+  return rows.slice(1).map((r, i) => {
+    if (r.length < columns) {
+      throw new Error(
+        `${label} ${i + 2}행: 열이 부족합니다.`,
+      );
+    }
+
+    return r;
+  });
+}
+
+async function textRequest(
+  url: string,
+  init: RequestInit = {},
+  parent?: AbortSignal,
+) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const timer = setTimeout(abort, 12000);
+
+  parent?.addEventListener("abort", abort, {
+    once: true,
+  });
+
+  if (parent?.aborted) abort();
+
+  try {
+    const res = await fetch(url, {
+      ...init,
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    const text = await res.text();
+
+    if (!res.ok) {
+      let message = `통신 오류 (${res.status})`;
+
+      try {
+        message =
+          JSON.parse(text).error || message;
+      } catch {
+        // 일반 HTTP 오류
+      }
+
+      throw new Error(message);
+    }
+
+    return text;
+  } finally {
+    clearTimeout(timer);
+    parent?.removeEventListener("abort", abort);
+  }
+}
+
+function savingEstimate(
+  s: Saving,
+  startDate: string,
+) {
+  if (
+    !s.maturity ||
+    (s.monthly > 0 && !s.day)
+  ) {
+    return null;
+  }
+
+  const start = Date.parse(
+    `${startDate}T00:00:00Z`,
+  );
+
+  const end = Date.parse(
+    `${s.maturity}T00:00:00Z`,
+  );
+
+  if (end <= start) {
+    return {
+      total: s.current,
+      count: 0,
+      matured: true,
+    };
+  }
+
+  let interest =
+    s.current *
+    (s.rate / 100) *
+    ((end - start) / 86400000 / 365);
+
+  let count = 0;
+  const first = new Date(start);
+
+  for (let i = 0; i < 1200; i++) {
+    const month = new Date(
+      Date.UTC(
+        first.getUTCFullYear(),
+        first.getUTCMonth() + i,
+        1,
+      ),
+    );
+
+    if (month.getTime() >= end) break;
+
+    const last = new Date(
+      Date.UTC(
+        month.getUTCFullYear(),
+        month.getUTCMonth() + 1,
+        0,
+      ),
+    ).getUTCDate();
+
+    const due = Date.UTC(
+      month.getUTCFullYear(),
+      month.getUTCMonth(),
+      Math.min(s.day || 1, last),
+    );
+
+    if (
+      s.monthly > 0 &&
+      due > start &&
+      due < end
+    ) {
+      count++;
+
+      interest +=
+        s.monthly *
+        (s.rate / 100) *
+        ((end - due) / 86400000 / 365);
+    }
+  }
+
+  return {
+    total:
+      s.current +
+      s.monthly * count +
+      interest,
+    count,
+    matured: false,
+  };
+}
+
+function Card({
+  children,
+}: {
+  children: ReactNode;
+}) {
   return (
-    <div className={`p-5 rounded-3xl border ${styles[variant]}`}>
-      <div className="flex items-center gap-2 mb-2">
-        {icon && <span className="text-xs opacity-70">{icon}</span>}
-        <p className="text-[10px] font-black uppercase tracking-widest opacity-60">{label}</p>
-      </div>
-      <p className="text-2xl font-black tracking-tight">{value}</p>
-      {sub && <p className="text-xs mt-1 opacity-60 font-medium">{sub}</p>}
+    <section className="card">
+      {children}
+    </section>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+}) {
+  return (
+    <div className="stat">
+      <small>{label}</small>
+      <strong>{value}</strong>
+      {sub && <small>{sub}</small>}
     </div>
   );
 }
 
-const ChartTooltip = ({ active, payload }: { active?: boolean; payload?: any[] }) => {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="bg-slate-800/95 backdrop-blur border border-slate-700 rounded-xl px-4 py-2 text-sm shadow-2xl">
-      <p className="text-white font-bold text-xs mb-0.5">{payload[0].name}</p>
-      <p className="text-slate-300 font-mono">{fmt(payload[0].value)}원</p>
-    </div>
+export default function AssetMaster() {
+  const [tab, setTab] = useState(0);
+  const [data, setData] = useState<Data | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const [pass, setPass] = useState("");
+  const [saved, setSaved] = useState<Saved | null>(null);
+  const [drafts, setDrafts] = useState<
+    Record<string, string>
+  >({});
+  const [dirty, setDirty] = useState(false);
+  const [cloudBusy, setCloudBusy] = useState(false);
+  const [cloudMessage, setCloudMessage] = useState("");
+
+  const requestRef = useRef<AbortController | null>(
+    null,
   );
-};
 
-export default function AssetMasterV3_9() {
-  const [activeTab, setActiveTab] = useState<TabKey>("overview");
-  const [isClient, setIsClient] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [lastUpdated, setLastUpdated] = useState("");
-  const [exchangeRate, setExchangeRate] = useState(1350);
-  const [targetDate, setTargetDate] = useState("2026-12-31");
+  const cloudLock = useRef(false);
 
-  const [stocks, setStocks] = useState<Stock[]>([]);
-  const [realized, setRealized] = useState<Realized[]>([]);
-  const [assets, setAssets] = useState<Asset[]>([]);
-  const [debts, setDebts] = useState<Debt[]>([]);
-  const [savings, setSavings] = useState<Saving[]>([]);
-  const [targetPrices, setTargetPrices] = useState<Record<string, number>>({});
+  const refresh = useCallback(async () => {
+    if (requestRef.current) return;
+
+    const controller = new AbortController();
+    requestRef.current = controller;
+    setLoading(true);
+
+    try {
+      const filesPromise = Promise.all(
+        GIDS.map((gid) =>
+          textRequest(
+            `${CSV_URL}?gid=${gid}&single=true&output=csv&t=${Date.now()}`,
+            {},
+            controller.signal,
+          ),
+        ),
+      );
+
+      const ratePromise = textRequest(
+        "https://open.er-api.com/v6/latest/USD",
+        {},
+        controller.signal,
+      )
+        .then((t) => JSON.parse(t))
+        .catch(() => null);
+
+      const [
+        [sText, rText, aText, dText, svText],
+        fx,
+      ] = await Promise.all([
+        filesPromise,
+        ratePromise,
+      ]);
+
+      const warnings: string[] = [];
+      const stocks: Stock[] = [];
+
+      for (const [i, c] of csv(
+        sText,
+        9,
+        "주식",
+      ).entries()) {
+        const label = `주식 ${i + 2}행`;
+        const qty = num(
+          c[7],
+          `${label} 수량`,
+        );
+
+        if (qty === 0) continue;
+
+        if (
+          qty < 0 ||
+          !c[0] ||
+          !c[1] ||
+          !c[2]
+        ) {
+          throw new Error(
+            `${label}: 시장·계좌·종목명·수량을 확인해주세요.`,
+          );
+        }
+
+        const cash =
+          /예수금|현금/.test(c[2]);
+
+        const foreign =
+          c[0].includes("해외");
+
+        const currency =
+          c[9]?.toUpperCase() ||
+          (foreign
+            ? cash
+              ? CONFIG.overseasCash
+              : "USD"
+            : "KRW");
+
+        if (
+          !["KRW", "USD"].includes(currency)
+        ) {
+          throw new Error(
+            `${label}: J열 통화는 KRW 또는 USD로 입력해주세요.`,
+          );
+        }
+
+        if (cash && qty !== 1) {
+          throw new Error(
+            `${label}: 예수금은 수량 1, 현재가 칸에 잔액을 입력해주세요.`,
+          );
+        }
+
+        if (
+          cash &&
+          foreign &&
+          !c[9]
+        ) {
+          warnings.push(
+            `해외 예수금은 ${CONFIG.overseasCash}로 가정합니다. J열에 실제 통화를 적어주세요.`,
+          );
+        }
+
+        const current = num(
+          c[6],
+          `${label} 현재가`,
+        );
+
+        const avg = cash
+          ? 0
+          : num(c[5], `${label} 평단`);
+
+        const daily = cash
+          ? 0
+          : num(c[8], `${label} I열`);
+
+        if (
+          current < 0 ||
+          avg < 0 ||
+          (CONFIG.dailyKind ===
+            "previousClose" &&
+            daily < 0)
+        ) {
+          throw new Error(
+            `${label}: 가격은 음수일 수 없습니다.`,
+          );
+        }
+
+        stocks.push({
+          id: JSON.stringify([
+            c[0],
+            currency,
+            c[3] || c[2],
+          ]),
+          account: c[1],
+          name: c[2],
+          currency,
+          cash,
+          qty,
+          current,
+          avg,
+          change: cash
+            ? 0
+            : CONFIG.dailyKind ===
+                "previousClose"
+              ? current - daily
+              : daily,
+        });
+      }
+
+      const rate =
+        fx?.result === "success" &&
+        typeof fx.rates?.KRW === "number" &&
+        Number.isFinite(fx.rates.KRW) &&
+        fx.rates.KRW > 0
+          ? fx.rates.KRW
+          : null;
+
+      if (
+        !rate &&
+        stocks.some(
+          (s) => s.currency === "USD",
+        )
+      ) {
+        throw new Error(
+          "환율 조회 실패로 기존 데이터를 유지합니다. 다시 새로고침해주세요.",
+        );
+      }
+
+      const assetRows = (
+        text: string,
+        label: string,
+      ): Asset[] =>
+        csv(text, 2, label).map((c, i) => {
+          const value = num(
+            c[1],
+            `${label} ${i + 2}행`,
+          );
+
+          if (!c[0] || value < 0) {
+            throw new Error(
+              `${label}: 이름과 양수 금액을 입력해주세요.`,
+            );
+          }
+
+          return {
+            name: c[0],
+            value,
+          };
+        });
+
+      const realized = csv(
+        rText,
+        6,
+        "실현손익",
+      ).map((c, i) => {
+        if (!c[1]) {
+          throw new Error(
+            `실현손익 ${i + 2}행: 종목명을 입력해주세요.`,
+          );
+        }
+
+        return {
+          date: date(c[0]),
+          name: c[1],
+          profit: num(
+            c[3],
+            `실현손익 ${i + 2}행`,
+          ),
+          note: c[5],
+        };
+      });
+
+      const savings = csv(
+        svText,
+        6,
+        "예적금",
+      ).map((c, i): Saving => {
+        const label = `예적금 ${i + 2}행`;
+
+        const monthly = num(
+          c[1],
+          label,
+          true,
+        );
+
+        const current = num(c[2], label);
+        const day = num(c[4], label, true);
+        const interest = num(
+          c[5],
+          label,
+          true,
+        );
+
+        const maturity = c[3]
+          ? date(c[3])
+          : "";
+
+        if (
+          !c[0] ||
+          monthly < 0 ||
+          current < 0 ||
+          !Number.isInteger(day) ||
+          day < 0 ||
+          day > 31 ||
+          interest < 0 ||
+          interest > 100 ||
+          (maturity &&
+            +maturity.slice(0, 4) >
+              new Date().getFullYear() +
+                99)
+        ) {
+          throw new Error(
+            `${label}: 상품명·금액·이체일·만기·금리를 확인해주세요.`,
+          );
+        }
+
+        return {
+          name: c[0],
+          monthly,
+          current,
+          day,
+          rate: interest,
+          maturity,
+        };
+      });
+
+      const stamp =
+        fx?.time_last_update_unix;
+
+      const rateDate =
+        rate &&
+        typeof stamp === "number" &&
+        Number.isFinite(stamp)
+          ? new Date(
+              stamp * 1000,
+            ).toISOString()
+          : "";
+
+      if (
+        rateDate &&
+        Date.now() - Date.parse(rateDate) >
+          72 * 3600000
+      ) {
+        warnings.push(
+          "환율 기준일이 72시간 이상 지났습니다.",
+        );
+      }
+
+      const next: Data = {
+        stocks,
+        realized,
+        savings,
+        assets: assetRows(
+          aText,
+          "실물자산",
+        ),
+        debts: assetRows(dText, "부채"),
+        rate,
+        rateDate,
+        updated: new Date().toISOString(),
+        warnings: [...new Set(warnings)],
+      };
+
+      if (!controller.signal.aborted) {
+        setData(next);
+        setError("");
+      }
+    } catch (e) {
+      if (!controller.signal.aborted) {
+        setError(
+          e instanceof Error &&
+            e.name !== "AbortError"
+            ? e.message
+            : "응답 시간이 초과되었습니다. 다시 시도해주세요.",
+        );
+      }
+    } finally {
+      if (
+        requestRef.current === controller
+      ) {
+        requestRef.current = null;
+        setLoading(false);
+      }
+    }
+  }, []);
 
   useEffect(() => {
-    setIsClient(true);
-    const loadCloudData = async () => {
-      try {
-        const res = await fetch(`${KV_URL}/get/user_targets`, { headers: { Authorization: `Bearer ${KV_TOKEN}` } });
-        const data = await res.json();
-        if (data.result) setTargetPrices(typeof data.result === 'string' ? JSON.parse(data.result) : data.result);
-      } catch (e) { console.error(e); }
-    };
-    loadCloudData();
-  }, []);
+    void refresh();
 
-  const saveToCloud = async (newTargets: Record<string, number>) => {
-    try { await fetch(`${KV_URL}/set/user_targets`, { method: 'POST', headers: { Authorization: `Bearer ${KV_TOKEN}` }, body: JSON.stringify(newTargets) }); }
-    catch (e) { console.error(e); }
-  };
-
-  const handleTargetChange = (name: string, val: string) => {
-    let newTargets = { ...targetPrices };
-    if (val === "") delete newTargets[name]; else newTargets[name] = cleanNum(val);
-    setTargetPrices(newTargets);
-    saveToCloud(newTargets);
-  };
-
-  const fetchCSV = async (gid: string) => {
-    try {
-      const res = await fetch(`${BASE_CSV_URL}gid=${gid}&single=true&output=csv&t=${Date.now()}`);
-      const text = await res.text();
-      return text.split("\n").map(r => r.trim()).filter(Boolean).slice(1);
-    } catch { return []; }
-  };
-
-  const fetchAllData = useCallback(async () => {
-    try {
-      setLoading(true);
-      const rateRes = await fetch("https://open.er-api.com/v6/latest/USD");
-      if (rateRes.ok) { const data = await rateRes.json(); if (data?.rates?.KRW) setExchangeRate(data.rates.KRW); }
-      const [sRows, rRows, aRows, dRows, svRows] = await Promise.all([fetchCSV(GIDS.STOCKS), fetchCSV(GIDS.REALIZED), fetchCSV(GIDS.ASSETS), fetchCSV(GIDS.DEBTS), fetchCSV(GIDS.SAVINGS)]);
-      const parseRow = (row: string) => row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map((v) => v.replace(/"/g, "").trim());
-      setStocks(sRows.map(row => { const c = parseRow(row); return { market: c[0], account: c[1], name: c[2], avg: cleanNum(c[5]), current: cleanNum(c[6]), qty: cleanNum(c[7]), dailyChange: cleanNum(c[8]) }; }).filter(s => s.qty > 0));
-      setRealized(rRows.map(row => { const c = parseRow(row); return { date: c[0], name: c[1], qty: cleanNum(c[2]), profit: cleanNum(c[3]), yieldRate: cleanNum(c[4]), note: c[5] }; }));
-      setAssets(aRows.map((row, i) => { const c = parseRow(row); return { id: i, name: c[0], value: cleanNum(c[1]) }; }));
-      setDebts(dRows.map((row, i) => { const c = parseRow(row); return { id: i, name: c[0], value: cleanNum(c[1]) }; }));
-      setSavings(svRows.map((row, i) => { const c = parseRow(row); return { id: i, name: c[0], monthly: cleanNum(c[1]), current: cleanNum(c[2]), maturityDate: c[3], transferDay: cleanNum(c[4]), interestRate: cleanNum(c[5]) }; }));
-      setLastUpdated(new Date().toLocaleTimeString("ko-KR"));
-      setLoading(false);
-    } catch (e) { setLoading(false); }
-  }, []);
-
-  useEffect(() => { fetchAllData(); const timer = setInterval(fetchAllData, 60000); return () => clearInterval(timer); }, [fetchAllData]);
-
-  const grouped = useMemo(() => {
-    const acc: Record<string, { items: Stock[]; total: number; profit: number; invested: number; dailyProfit: number }> = {};
-    stocks.forEach((s) => {
-      const isOS = s.market.includes("해외"); const rate = isOS ? exchangeRate : 1;
-      if (!acc[s.account]) acc[s.account] = { items: [], total: 0, profit: 0, invested: 0, dailyProfit: 0 };
-      acc[s.account].items.push(s);
-      
-      // 예수금은 매입가/이익 계산에서 제외하고 총 자산에만 더함
-      if (s.name.includes("예수금")) {
-        acc[s.account].total += s.current * rate * s.qty;
-      } else {
-        acc[s.account].total += s.current * rate * s.qty;
-        acc[s.account].invested += s.avg * rate * s.qty;
-        acc[s.account].profit += (s.current - s.avg) * rate * s.qty;
-        acc[s.account].dailyProfit += s.dailyChange * rate * s.qty;
+    const timer = setInterval(() => {
+      if (!document.hidden) {
+        void refresh();
       }
-    });
-    return acc;
-  }, [stocks, exchangeRate]);
+    }, 60000);
 
-  const totalStockVal = useMemo(() => stocks.reduce((a, b) => a + b.current * (b.market.includes("해외") ? exchangeRate : 1) * b.qty, 0), [stocks, exchangeRate]);
-  const totalDailyProfit = useMemo(() => Object.values(grouped).reduce((a, b) => a + b.dailyProfit, 0), [grouped]);
-  const totalAssetsVal = assets.reduce((a, b) => a + b.value, 0);
-  const totalSavingsVal = savings.reduce((a, b) => a + b.current, 0);
-  const totalDebtsVal = debts.reduce((a, b) => a + b.value, 0);
-  const netWorth = totalStockVal + totalAssetsVal + totalSavingsVal - totalDebtsVal;
+    return () => {
+      clearInterval(timer);
+      requestRef.current?.abort();
+      requestRef.current = null;
+    };
+  }, [refresh]);
 
-  const compositionData = useMemo(() => [{ name: "주식", value: Math.round(totalStockVal), color: "#6366f1" }, { name: "실물 자산", value: Math.round(totalAssetsVal), color: "#06b6d4" }, { name: "예적금", value: Math.round(totalSavingsVal), color: "#10b981" }].filter(d => d.value > 0), [totalStockVal, totalAssetsVal, totalSavingsVal]);
-  const accountChartData = useMemo(() => Object.entries(grouped).map(([name, data], i) => ({ name, value: Math.round(data.total), color: ACCOUNT_COLORS[i % ACCOUNT_COLORS.length] })).sort((a, b) => b.value - a.value), [grouped]);
+  useEffect(() => {
+    if (!dirty) return;
 
-  const projectedNetWorth = useMemo(() => {
-    const target = new Date(targetDate); const now = new Date();
-    const ps = savings.reduce((acc, s) => {
-      const maturity = new Date(s.maturityDate || targetDate); const end = target > maturity ? maturity : target;
-      if (end <= now) return acc + s.current;
-      const months = Math.max(0, (end.getFullYear() - now.getFullYear()) * 12 + (end.getMonth() - now.getMonth()));
-      const principal = s.current + s.monthly * months;
-      const cInt = s.current * (s.interestRate / 100) * (months / 12);
-      const fInt = ((s.monthly * months * (months + 1)) / 2) * (s.interestRate / 100 / 12);
-      return acc + principal + cInt + fInt;
-    }, 0);
-    return totalStockVal + totalAssetsVal + ps - totalDebtsVal;
-  }, [targetDate, savings, totalStockVal, totalAssetsVal, totalDebtsVal]);
+    const warn = (
+      e: BeforeUnloadEvent,
+    ) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
 
-  // 실현손익 총 누계
-  const totalRealizedProfit = useMemo(() => realized.reduce((acc, r) => acc + r.profit, 0), [realized]);
-  
-  // 실현손익 연도별 통계
-  const realizedYearly = useMemo(() => {
-    const acc: Record<string, number> = {};
-    realized.forEach((r) => {
-      const y = r.date.substring(0, 4);
-      if (!acc[y]) acc[y] = 0;
-      acc[y] += r.profit;
-    });
-    return Object.entries(acc).sort((a, b) => Number(b[0]) - Number(a[0]));
-  }, [realized]);
+    window.addEventListener(
+      "beforeunload",
+      warn,
+    );
 
-  // 실현손익 월별 그룹핑
-  const realizedGrouped = useMemo(() => {
-    const sorted = [...realized].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    const acc: Record<string, { items: Realized[]; sub: number }> = {};
-    sorted.forEach((r) => { const m = r.date.substring(0, 7); if (!acc[m]) acc[m] = { items: [], sub: 0 }; acc[m].items.push(r); acc[m].sub += r.profit; });
-    return acc;
-  }, [realized]);
+    return () =>
+      window.removeEventListener(
+        "beforeunload",
+        warn,
+      );
+  }, [dirty]);
 
-  const simulationData = useMemo(() => {
-    let currentKrwTotal = 0; let targetKrwTotal = 0; let totalCostKrw = 0;
-    const aggMap: Record<string, { name: string; qty: number; current: number; avg: number; isOS: boolean; rate: number; totalCost: number; }> = {};
-    stocks.forEach(s => {
-      if (s.name.includes("예수금")) return; // 시뮬레이션에서 예수금 제외
-      const isOS = s.market.includes("해외"); const rate = isOS ? exchangeRate : 1;
-      if (!aggMap[s.name]) { aggMap[s.name] = { name: s.name, qty: 0, current: s.current, avg: 0, isOS, rate, totalCost: 0 }; }
-      aggMap[s.name].qty += s.qty; aggMap[s.name].totalCost += (s.avg * s.qty * rate);
-    });
-    const items = Object.values(aggMap).map(item => {
-      const currentKrw = item.current * item.rate * item.qty; currentKrwTotal += currentKrw; totalCostKrw += item.totalCost;
-      const target = targetPrices[item.name] || item.current; const targetKrw = target * item.rate * item.qty; targetKrwTotal += targetKrw;
-      const diffPct = item.current > 0 ? ((target - item.current) / item.current) * 100 : 0;
-      const extra = targetKrw - currentKrw; const final = targetKrw - item.totalCost;
-      return { ...item, target, diffPct, expectedProfit: extra, finalProfit: final, finalYield: item.totalCost > 0 ? (final/item.totalCost)*100 : 0, currentKrw, targetKrw };
-    }).sort((a, b) => b.currentKrw - a.currentKrw);
-    return { items, currentKrwTotal, targetKrwTotal, expectedExtraProfit: targetKrwTotal - currentKrwTotal, totalProfitAtTarget: targetKrwTotal - totalCostKrw };
-  }, [stocks, targetPrices, exchangeRate]);
+  const parsed = useMemo(() => {
+    const prices: Record<string, number> =
+      Object.create(null);
+
+    for (const [key, text] of Object.entries(
+      drafts,
+    )) {
+      const s = text
+        .replace(/,/g, "")
+        .trim();
+
+      if (!s) continue;
+
+      if (
+        !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(
+          s,
+        ) ||
+        !Number.isFinite(Number(s)) ||
+        Number(s) > 1e12
+      ) {
+        return {
+          prices: saved?.prices || {},
+          invalid: true,
+        };
+      }
+
+      prices[key] = Number(s);
+    }
+
+    return {
+      prices,
+      invalid: false,
+    };
+  }, [drafts, saved]);
+
+  async function cloud(save: boolean) {
+    if (
+      cloudLock.current ||
+      !pass.trim() ||
+      (save &&
+        (!saved || parsed.invalid))
+    ) {
+      return;
+    }
+
+    if (
+      !save &&
+      dirty &&
+      !window.confirm(
+        "저장하지 않은 입력을 버리고 서버 저장값을 불러올까요?",
+      )
+    ) {
+      return;
+    }
+
+    cloudLock.current = true;
+    setCloudBusy(true);
+    setCloudMessage(
+      save
+        ? "저장 중…"
+        : "불러오는 중…",
+    );
+
+    try {
+      const result: Saved = JSON.parse(
+        await textRequest(API, {
+          method: save ? "PUT" : "GET",
+          headers: {
+            Authorization: `Bearer ${pass.trim()}`,
+            "Content-Type":
+              "application/json",
+          },
+          ...(save
+            ? {
+                body: JSON.stringify({
+                  version: saved!.version,
+                  prices: parsed.prices,
+                }),
+              }
+            : {}),
+        }),
+      );
+
+      if (
+        !Number.isSafeInteger(
+          result.version,
+        ) ||
+        !result.prices ||
+        typeof result.prices !== "object" ||
+        Array.isArray(result.prices) ||
+        Object.values(
+          result.prices,
+        ).some(
+          (v) =>
+            typeof v !== "number" ||
+            !Number.isFinite(v) ||
+            v < 0,
+        )
+      ) {
+        throw new Error(
+          "저장 데이터 형식 오류",
+        );
+      }
+
+      setSaved(result);
+
+      setDrafts(
+        Object.fromEntries(
+          Object.entries(
+            result.prices,
+          ).map(([k, v]) => [
+            k,
+            String(v),
+          ]),
+        ),
+      );
+
+      setDirty(false);
+
+      setCloudMessage(
+        save
+          ? "목표가 저장 완료 ✓"
+          : "저장된 목표가를 불러왔습니다.",
+      );
+    } catch (e) {
+      setCloudMessage(
+        e instanceof Error &&
+          e.name !== "AbortError"
+          ? e.message
+          : "저장소 응답 시간이 초과되었습니다. 입력은 유지됩니다.",
+      );
+    } finally {
+      cloudLock.current = false;
+      setCloudBusy(false);
+    }
+  }
+
+  const portfolio = useMemo(() => {
+    const groups = new Map<
+      string,
+      {
+        name: string;
+        items: Stock[];
+        total: number;
+        cash: number;
+        cost: number;
+        profit: number;
+        daily: number;
+      }
+    >();
+
+    const combined = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        currency: string;
+        qty: number;
+        value: number;
+        cost: number;
+        nativeValue: number;
+        fx: number;
+      }
+    >();
+
+    for (const s of data?.stocks || []) {
+      const fx =
+        s.currency === "USD"
+          ? data!.rate!
+          : 1;
+
+      const value =
+        s.current * s.qty * fx;
+
+      const a = groups.get(s.account) || {
+        name: s.account,
+        items: [],
+        total: 0,
+        cash: 0,
+        cost: 0,
+        profit: 0,
+        daily: 0,
+      };
+
+      a.items.push(s);
+      a.total += value;
+
+      if (s.cash) {
+        a.cash += value;
+      } else {
+        a.cost += s.avg * s.qty * fx;
+
+        a.profit +=
+          (s.current - s.avg) *
+          s.qty *
+          fx;
+
+        a.daily +=
+          s.change * s.qty * fx;
+
+        const b = combined.get(s.id) || {
+          id: s.id,
+          name: s.name,
+          currency: s.currency,
+          qty: 0,
+          value: 0,
+          cost: 0,
+          nativeValue: 0,
+          fx,
+        };
+
+        b.qty += s.qty;
+        b.value += value;
+        b.cost += s.avg * s.qty * fx;
+        b.nativeValue +=
+          s.current * s.qty;
+
+        combined.set(s.id, b);
+      }
+
+      groups.set(s.account, a);
+    }
+
+    const accounts = [
+      ...groups.values(),
+    ];
+
+    return {
+      accounts,
+      items: [...combined.values()],
+      total: accounts.reduce(
+        (n, a) => n + a.total,
+        0,
+      ),
+      cash: accounts.reduce(
+        (n, a) => n + a.cash,
+        0,
+      ),
+      daily: accounts.reduce(
+        (n, a) => n + a.daily,
+        0,
+      ),
+    };
+  }, [data]);
+
+  const simulation = portfolio.items
+    .map((s) => {
+      const current =
+        s.nativeValue / s.qty;
+
+      const target =
+        parsed.prices[s.id] ?? current;
+
+      const targetValue =
+        target * s.qty * s.fx;
+
+      return {
+        ...s,
+        current,
+        targetValue,
+        extra: targetValue - s.value,
+        profit: targetValue - s.cost,
+      };
+    })
+    .sort((a, b) => b.value - a.value);
+
+  const extra = simulation.reduce(
+    (n, s) => n + s.extra,
+    0,
+  );
+
+  const assets =
+    data?.assets.reduce(
+      (n, a) => n + a.value,
+      0,
+    ) || 0;
+
+  const debts =
+    data?.debts.reduce(
+      (n, a) => n + a.value,
+      0,
+    ) || 0;
+
+  const savings =
+    data?.savings.reduce(
+      (n, a) => n + a.current,
+      0,
+    ) || 0;
+
+  const net =
+    portfolio.total +
+    assets +
+    savings -
+    debts;
+
+  const realized = useMemo(() => {
+    const years = new Map<
+      string,
+      number
+    >();
+
+    const months = new Map<
+      string,
+      {
+        total: number;
+        items: Realized[];
+      }
+    >();
+
+    for (const r of [
+      ...(data?.realized || []),
+    ].sort((a, b) =>
+      b.date.localeCompare(a.date),
+    )) {
+      const y = r.date.slice(0, 4);
+      const m = r.date.slice(0, 7);
+
+      years.set(
+        y,
+        (years.get(y) || 0) +
+          r.profit,
+      );
+
+      const group = months.get(m) || {
+        total: 0,
+        items: [],
+      };
+
+      group.total += r.profit;
+      group.items.push(r);
+      months.set(m, group);
+    }
+
+    return {
+      years: [...years],
+      months: [...months],
+      total: [...years.values()].reduce(
+        (a, b) => a + b,
+        0,
+      ),
+    };
+  }, [data]);
 
   return (
-    <div className="min-h-screen bg-[#0c0e12] text-slate-200 p-4 md:p-8 font-sans relative">
-      <div className="fixed inset-0 pointer-events-none opacity-20">
-        <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-blue-900/20 rounded-full blur-[120px]" />
-        <div className="absolute bottom-0 right-1/4 w-[500px] h-[500px] bg-emerald-900/10 rounded-full blur-[120px]" />
-      </div>
+    <main className="am4">
+      <style>{CSS}</style>
 
-      <div className="max-w-5xl mx-auto relative">
-        <header className="mb-8 flex flex-wrap justify-between items-end border-b border-slate-800 pb-6 gap-4">
+      <div className="wrap">
+        <header>
           <div>
-            <h1 className="text-4xl font-black text-white italic tracking-tighter">ASSET MASTER <span className="text-blue-500">V3.9</span></h1>
-            <p className="text-slate-500 text-[10px] font-bold tracking-[0.3em] uppercase mt-1">LG MDI Accounting · {lastUpdated}</p>
+            <p className="eyebrow">
+              PERSONAL FINANCE
+            </p>
+
+            <h1>
+              ASSET MASTER <span>V4</span>
+            </h1>
+
+            <small>
+              {data
+                ? `마지막 성공 조회 ${time(data.updated)}`
+                : "자산과 목표를 한눈에"}
+            </small>
           </div>
-          <div className="flex items-center gap-3">
-            <button 
-              onClick={fetchAllData} 
-              className="text-[10px] px-4 py-2 rounded-xl font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all flex items-center gap-2"
-            >
-              <span className={loading ? "animate-spin" : ""}>↻</span> {loading ? "SYNCING..." : "REFRESH"}
-            </button>
-            <div className="text-[10px] text-amber-400 font-mono bg-amber-500/10 px-4 py-2 rounded-2xl border border-amber-500/20 font-bold">USD/KRW: {fmtDecimal(exchangeRate)}</div>
-          </div>
+
+          <button
+            disabled={loading}
+            onClick={() => void refresh()}
+          >
+            {loading
+              ? "동기화 중…"
+              : "↻ 새로고침"}
+          </button>
         </header>
 
-        <nav className="flex gap-2 mb-10 overflow-x-auto pb-2 scrollbar-hide">
-          {TABS.map((t) => (
-            <button key={t.key} onClick={() => setActiveTab(t.key)} className={`px-5 py-3 rounded-2xl font-black text-[10px] tracking-widest uppercase transition-all whitespace-nowrap flex items-center gap-2 ${activeTab === t.key ? "bg-blue-600 text-white shadow-lg" : "bg-slate-900 text-slate-500 hover:bg-slate-800"}`}>
-              <span>{t.icon}</span> <span>{t.num}. {t.label}</span>
+        <nav>
+          {TABS.map((name, i) => (
+            <button
+              key={name}
+              className={
+                tab === i ? "active" : ""
+              }
+              onClick={() => setTab(i)}
+            >
+              {i + 1}. {name}
             </button>
           ))}
         </nav>
 
-        {/* 탭 1: 요약 */}
-        {activeTab === "overview" && (
-          <div className="space-y-6 animate-in fade-in duration-500">
-            <div className="bg-gradient-to-br from-blue-900/40 via-slate-900 to-slate-900 p-10 md:p-12 rounded-[40px] border border-blue-500/20 shadow-2xl">
-              <p className="text-blue-400 text-[10px] font-black uppercase mb-3 opacity-80 tracking-widest">💼 Current Net Worth</p>
-              <h2 className="text-5xl md:text-7xl font-black text-white tracking-tighter">{fmt(netWorth)}<span className="text-2xl font-light ml-2 opacity-30">KRW</span></h2>
-              <div className="mt-6 flex justify-between items-end">
-                <p className="text-slate-500 text-sm font-mono">약 {fmtShort(netWorth)}원</p>
-                <div className={`text-right p-4 rounded-2xl border backdrop-blur ${totalDailyProfit >= 0 ? "bg-rose-500/10 border-rose-500/30" : "bg-blue-500/10 border-blue-500/30"}`}>
-                  <p className="text-[10px] text-slate-400 font-black uppercase mb-1">Today's P&L</p>
-                  <p className={`text-2xl font-black ${pctColor(totalDailyProfit)}`}>{pctSign(totalDailyProfit)}{fmt(totalDailyProfit)}원</p>
-                </div>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <StatCard label="주식 평가액" value={`${fmtShort(totalStockVal)}원`} icon="📈" />
-              <StatCard label="기타 자산" value={`${fmtShort(totalAssetsVal)}원`} icon="🏠" />
-              <StatCard label="예적금" value={`${fmtShort(totalSavingsVal)}원`} variant="success" icon="🏦" />
-              <StatCard label="부채 총계" value={`${fmtShort(totalDebtsVal)}원`} variant="danger" icon="💳" />
-            </div>
-          </div>
+        {error && (
+          <p
+            className="alert"
+            role="alert"
+          >
+            {error}
+            {data &&
+              " 마지막 정상 데이터를 표시하고 있습니다."}
+          </p>
         )}
 
-        {/* 탭 2: 계좌별 주식 (예수금 분리 패치) */}
-        {activeTab === "stocks" && (
-          <div className="space-y-6 animate-in fade-in duration-500">
-            {Object.keys(grouped).map((acc) => (
-              <Card key={acc} className="overflow-hidden">
-                <div className="px-6 py-5 bg-slate-800/40 border-b border-slate-800 flex justify-between items-center flex-wrap gap-4">
-                  <div className="flex items-center gap-4">
-                    <div className="flex flex-col">
-                      <span className="font-black text-white italic text-lg tracking-tight">💳 {acc}</span>
-                      <span className={`text-[10px] font-black px-2 py-1 rounded-lg mt-1 w-fit ${grouped[acc].dailyProfit >= 0 ? "bg-rose-500/10 text-rose-400" : "bg-blue-500/10 text-blue-400"}`}>
-                        오늘 {pctSign(grouped[acc].dailyProfit)}{fmt(grouped[acc].dailyProfit)}원
-                      </span>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-[10px] text-slate-500 font-black uppercase mb-1">Total Valuation</div>
-                    <div className="text-white font-black text-xl leading-none">{fmt(grouped[acc].total)}원</div>
-                    {grouped[acc].invested > 0 && (
-                      <div className={`text-xs font-bold mt-1 ${pctColor(grouped[acc].profit)}`}>
-                        총 누적 {pctSign(grouped[acc].profit)}{fmt(grouped[acc].profit)}원 ({((grouped[acc].total / grouped[acc].invested - 1) * 100).toFixed(1)}%)
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-sm">
-                    <tbody className="divide-y divide-slate-800/60">
-                      {grouped[acc].items.map((s, i) => {
-                        const isCash = s.name.includes("예수금");
-                        const isOS = s.market.includes("해외"); 
-                        const rate = isOS ? exchangeRate : 1; 
-                        
-                        // 예수금 렌더링
-                        if (isCash) {
-                          const cashAmt = s.current * rate * s.qty;
-                          return (
-                            <tr key={i} className="hover:bg-emerald-950/20 transition-colors bg-emerald-950/10">
-                              <td className="px-6 py-4 font-bold text-slate-200">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-[11px] px-1.5 py-0.5 rounded font-black bg-emerald-500/20 text-emerald-400">💵</span>
-                                  <span className="text-emerald-300">{s.name}</span>
-                                </div>
-                              </td>
-                              <td className="px-6 py-4 text-right">
-                                <div className="text-sm font-black text-emerald-400">{fmt(cashAmt)}원</div>
-                              </td>
-                            </tr>
-                          );
-                        }
-
-                        // 일반 주식 렌더링
-                        const profKrw = (s.current - s.avg) * rate * s.qty;
-                        return (
-                          <tr key={i} className="hover:bg-white/[0.02] transition-colors">
-                            <td className="px-6 py-4 font-bold text-slate-200">
-                              <div className="flex items-center gap-2">
-                                <span className={`text-[9px] px-1.5 py-0.5 rounded font-black ${isOS ? "bg-amber-500/20 text-amber-400" : "bg-blue-500/20 text-blue-400"}`}>{isOS ? "US" : "KR"}</span>
-                                <span>{s.name}</span>
-                              </div>
-                              <div className="text-[10px] text-slate-600 mt-1">{s.qty.toLocaleString()}주 · 평단 {isOS ? `$${s.avg}` : fmt(s.avg)}</div>
-                            </td>
-                            <td className="px-6 py-4 text-right">
-                              <div className={`text-sm font-black ${pctColor(s.dailyChange)}`}>{pctSign(s.dailyChange)}{fmt(s.dailyChange * rate * s.qty)}원</div>
-                              <div className={`text-[10px] mt-0.5 ${pctColor(profKrw)} opacity-70`}>{pctSign(profKrw)}{fmt(profKrw)}원 ({((s.current/s.avg - 1)*100).toFixed(1)}%)</div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </Card>
+        {!data ? (
+          <Card>
+            <p className="empty">
+              {loading
+                ? "구글시트와 환율을 불러오는 중입니다…"
+                : "조회된 데이터가 없습니다. 설정 확인 후 새로고침해주세요."}
+            </p>
+          </Card>
+        ) : (
+          <>
+            {data.warnings.map((w) => (
+              <p
+                className="alert"
+                key={w}
+              >
+                {w}
+              </p>
             ))}
-          </div>
-        )}
 
-        {/* 탭 3: 실물/부채 */}
-        {activeTab === "realestate" && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in duration-500">
-            <Card className="p-8">
-              <h3 className="text-xl font-black text-white italic mb-6">🏠 Real Assets</h3>
-              <div className="space-y-3">
-                {assets.map(a => (
-                  <div key={a.id} className="flex justify-between items-center bg-slate-950 p-4 rounded-2xl border border-slate-800">
-                    <span className="font-bold text-slate-300">{a.name}</span>
-                    <span className="font-black text-blue-400">{fmt(a.value)}원</span>
-                  </div>
-                ))}
-              </div>
-            </Card>
-            <Card className="p-8 border-rose-900/30 bg-rose-900/10">
-              <h3 className="text-xl font-black text-rose-400 italic mb-6">💳 Liabilities</h3>
-              <div className="space-y-3">
-                {debts.map(d => (
-                  <div key={d.id} className="flex justify-between items-center bg-slate-950 p-4 rounded-2xl border border-rose-900/20">
-                    <span className="font-bold text-slate-300">{d.name}</span>
-                    <span className="font-black text-rose-400">-{fmt(d.value)}원</span>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          </div>
-        )}
+            <p className="meta">
+              USD/KRW{" "}
+              {data.rate
+                ? dec(data.rate)
+                : "—"}
+              {data.rateDate &&
+                ` · 환율 기준 ${time(data.rateDate)}`}
+              {" · 60초마다 확인"}
+            </p>
 
-        {/* 탭 4: 예적금 */}
-        {activeTab === "savings" && (
-          <div className="space-y-6 animate-in fade-in duration-500">
-            {savings.map((s) => {
-              const maturity = new Date(s.maturityDate); const now = new Date();
-              const mLeft = Math.max(0, (maturity.getFullYear() - now.getFullYear()) * 12 + (maturity.getMonth() - now.getMonth()));
-              const fPrincipal = s.current + s.monthly * mLeft;
-              const cInt = s.current * (s.interestRate / 100) * (mLeft / 12);
-              const fInt = ((s.monthly * mLeft * (mLeft + 1)) / 2) * (s.interestRate / 100 / 12);
-              const fVal = fPrincipal + cInt + fInt;
-              return (
-                <Card key={s.id} className="p-6">
-                  <div className="flex justify-between items-center mb-4 border-b border-slate-800 pb-4">
-                    <h3 className="text-xl font-black text-white italic">{s.name}</h3>
-                    <span className="text-emerald-400 font-mono text-sm">만기까지 {mLeft}개월</span>
-                  </div>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div><p className="text-[10px] text-slate-500 uppercase">현재 잔액</p><p className="font-bold">{fmt(s.current)}원</p></div>
-                    <div><p className="text-[10px] text-slate-500 uppercase">금리</p><p className="font-bold text-emerald-400">{s.interestRate}%</p></div>
-                    <div className="col-span-2 bg-emerald-950/40 p-4 rounded-2xl text-right">
-                      <p className="text-[10px] text-emerald-400 uppercase font-black">만기 예상액</p>
-                      <p className="text-xl font-black text-white">{fmt(fVal)}원</p>
-                    </div>
-                  </div>
-                </Card>
-              );
-            })}
-          </div>
-        )}
+            {tab === 0 && (
+              <div className="stack">
+                <section className="hero">
+                  <p className="eyebrow">
+                    CURRENT NET WORTH · 순자산
+                  </p>
 
-        {/* 탭 5: 실현 손익 (총 누계 및 연도별 추가) */}
-        {activeTab === "realized" && (
-          <div className="space-y-6 animate-in fade-in duration-500">
-            
-            {/* 총 누적 통계 */}
-            <div className="bg-gradient-to-r from-amber-900/30 to-rose-900/30 p-8 rounded-[40px] border border-amber-500/20 shadow-xl">
-              <p className="text-amber-400 text-[10px] font-black uppercase mb-2 tracking-widest">총 누적 실현손익</p>
-              <h2 className={`text-4xl md:text-5xl font-black ${pctColor(totalRealizedProfit)}`}>
-                {pctSign(totalRealizedProfit)}{fmt(totalRealizedProfit)} 원
-              </h2>
-            </div>
+                  <h2>
+                    {fmt(net)}{" "}
+                    <small>원</small>
+                  </h2>
 
-            {/* 연도별 통계 카드 */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {realizedYearly.map(([year, profit]) => (
-                <StatCard 
-                  key={year} 
-                  label={`${year}년 누계`} 
-                  value={`${pctSign(profit)}${fmt(profit)}원`} 
-                  variant={profit >= 0 ? "success" : "danger"} 
-                  icon="📅" 
-                />
-              ))}
-            </div>
+                  <div className="row">
+                    <p className="muted">
+                      약{" "}
+                      {(net / 1e8).toFixed(2)}
+                      억원
+                    </p>
 
-            {/* 기존 월별 리스트 */}
-            {Object.keys(realizedGrouped).map((m) => (
-              <Card key={m} className="overflow-hidden">
-                <div className="px-6 py-4 bg-slate-800/40 flex justify-between items-center border-b border-slate-800">
-                  <span className="font-black text-slate-300">{m} 결산</span>
-                  <span className={`font-black ${realizedGrouped[m].sub >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{pctSign(realizedGrouped[m].sub)}{fmt(realizedGrouped[m].sub)}원</span>
-                </div>
-                <table className="w-full text-left text-sm">
-                  <tbody className="divide-y divide-slate-800/60">
-                    {realizedGrouped[m].items.map((r, i) => (
-                      <tr key={i} className="hover:bg-white/[0.02]">
-                        <td className="px-6 py-4 text-xs font-mono text-slate-500">{r.date.substring(5)}</td>
-                        <td className="px-6 py-4 font-bold">{r.name}</td>
-                        <td className={`px-6 py-4 text-right font-black ${r.profit >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{pctSign(r.profit)}{fmt(r.profit)}원</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </Card>
-            ))}
-          </div>
-        )}
-
-        {/* 탭 6: 목표가 시뮬레이션 */}
-        {activeTab === "simulation" && (
-          <div className="space-y-6 animate-in fade-in duration-500">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-gradient-to-r from-indigo-900/30 to-purple-900/30 p-8 rounded-[40px] border border-indigo-500/20 shadow-xl">
-                <p className="text-indigo-400 text-[10px] font-black uppercase mb-2 tracking-widest">목표 달성 시 총 평가액</p>
-                <h2 className="text-4xl font-black text-white">{fmt(simulationData.targetKrwTotal)} 원</h2>
-                <p className="text-xs text-slate-500 mt-2">현재가 대비 +{fmt(simulationData.expectedExtraProfit)} 원 추가 상승 기대</p>
-              </div>
-              <div className="bg-gradient-to-r from-emerald-900/30 to-teal-900/30 p-8 rounded-[40px] border border-emerald-500/20 shadow-xl">
-                <p className="text-emerald-400 text-[10px] font-black uppercase mb-2 tracking-widest">목표 달성 시 총 손익 (누적)</p>
-                <h2 className="text-4xl font-black text-white">{pctSign(simulationData.totalProfitAtTarget)}{fmt(simulationData.totalProfitAtTarget)} 원</h2>
-                <p className="text-xs text-slate-500 mt-2">매수 원금 대비 모든 종목 목표가 도달 시 결과</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {simulationData.items.map((item, i) => (
-                <Card key={i} className="p-6 flex flex-col gap-4">
-                  <div className="flex justify-between items-start">
                     <div>
-                      <h3 className="text-lg font-black text-white">{item.name}</h3>
-                      <p className="text-xs text-slate-500 mt-1">현재가: {item.isOS ? `$${fmtDecimal(item.current)}` : `${fmt(item.current)}원`}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[10px] text-slate-500 font-black uppercase mb-1">목표가 {item.isOS ? "(USD)" : "(KRW)"}</p>
-                      <input type="text" value={targetPrices[item.name] ? fmtDecimal(targetPrices[item.name]) : ""} onChange={(e) => handleTargetChange(item.name, e.target.value)} placeholder={fmtDecimal(item.current)} className="w-28 bg-slate-950 text-white font-bold p-2 rounded-lg border border-slate-700 outline-none focus:border-indigo-500 text-right transition-colors" />
+                      <small>
+                        보유 주식 전일 대비
+                      </small>
+
+                      <strong
+                        className={tone(
+                          portfolio.daily,
+                        )}
+                      >
+                        {sign(portfolio.daily)}
+                        원
+                      </strong>
                     </div>
                   </div>
-                  <div className="bg-indigo-900/10 p-5 rounded-2xl border border-indigo-500/20 flex justify-between items-center">
-                    <div><p className="text-[10px] text-indigo-400 font-black uppercase">목표 달성 시 수익</p><p className={`text-xl font-black ${pctColor(item.finalProfit)}`}>{pctSign(item.finalProfit)}{fmt(item.finalProfit)} 원</p></div>
-                    <div className="text-right"><p className="text-[10px] text-indigo-400 font-black uppercase">수익률</p><p className={`text-xl font-black ${pctColor(item.finalYield)}`}>{item.finalYield.toFixed(1)}%</p></div>
+                </section>
+
+                <div className="grid four">
+                  <Stat
+                    label="주식 평가액"
+                    value={`${fmt(
+                      portfolio.total -
+                        portfolio.cash,
+                    )}원`}
+                  />
+
+                  <Stat
+                    label="예수금"
+                    value={`${fmt(portfolio.cash)}원`}
+                  />
+
+                  <Stat
+                    label="실물 자산"
+                    value={`${fmt(assets)}원`}
+                  />
+
+                  <Stat
+                    label="예적금"
+                    value={`${fmt(savings)}원`}
+                  />
+                </div>
+
+                <Card>
+                  <div className="row">
+                    <span>부채 총계</span>
+                    <strong>
+                      {fmt(debts)}원
+                    </strong>
                   </div>
                 </Card>
-              ))}
-            </div>
-          </div>
+
+                <p className="note">
+                  전일 대비는 현재 보유 수량과 현재
+                  환율 기준입니다. 당일 매매·입출금·환율
+                  변동 손익은 포함하지 않습니다.
+                  해외 평단도 현재 환율로 환산하므로
+                  증권사의 실제 원화 수익률과 차이가
+                  있을 수 있습니다.
+                </p>
+              </div>
+            )}
+
+            {tab === 1 && (
+              <div className="stack">
+                {!portfolio.accounts.length && (
+                  <p className="empty">
+                    보유 내역이 없습니다.
+                  </p>
+                )}
+
+                {portfolio.accounts.map((a) => (
+                  <Card key={a.name}>
+                    <div className="row">
+                      <h2>💳 {a.name}</h2>
+
+                      <div className="right">
+                        <strong>
+                          {fmt(a.total)}원
+                        </strong>
+
+                        <p
+                          className={tone(a.profit)}
+                        >
+                          평가손익{" "}
+                          {sign(a.profit)}원 ·{" "}
+                          {a.cost > 0
+                            ? `${(
+                                (a.profit /
+                                  a.cost) *
+                                100
+                              ).toFixed(2)}%`
+                            : "—"}
+                        </p>
+
+                        <small
+                          className={tone(a.daily)}
+                        >
+                          전일 대비{" "}
+                          {sign(a.daily)}원
+                        </small>
+                      </div>
+                    </div>
+
+                    <div className="table">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>종목 / 수량</th>
+                            <th>현재가 / 평단</th>
+                            <th>평가액</th>
+                            <th>
+                              전일 대비 / 평가손익
+                            </th>
+                          </tr>
+                        </thead>
+
+                        <tbody>
+                          {a.items.map((s, i) => {
+                            const fx =
+                              s.currency ===
+                              "USD"
+                                ? data.rate!
+                                : 1;
+
+                            const profit =
+                              (s.current -
+                                s.avg) *
+                              s.qty *
+                              fx;
+
+                            const daily =
+                              s.change *
+                              s.qty *
+                              fx;
+
+                            return (
+                              <tr
+                                key={`${s.id}-${i}`}
+                              >
+                                <td>
+                                  <b>
+                                    {s.cash
+                                      ? "💵 "
+                                      : ""}
+                                    {s.name}
+                                  </b>
+
+                                  <small>
+                                    {s.cash
+                                      ? "예수금"
+                                      : `${dec(s.qty)}주`}
+                                    {" · "}
+                                    {s.currency}
+                                  </small>
+                                </td>
+
+                                <td>
+                                  {dec(s.current)}
+
+                                  {!s.cash && (
+                                    <small>
+                                      평단{" "}
+                                      {dec(s.avg)}
+                                    </small>
+                                  )}
+                                </td>
+
+                                <td>
+                                  {fmt(
+                                    s.current *
+                                      s.qty *
+                                      fx,
+                                  )}
+                                  원
+                                </td>
+
+                                <td>
+                                  {s.cash ? (
+                                    "—"
+                                  ) : (
+                                    <>
+                                      <b
+                                        className={tone(
+                                          daily,
+                                        )}
+                                      >
+                                        {sign(daily)}
+                                        원
+                                      </b>
+
+                                      <small
+                                        className={tone(
+                                          profit,
+                                        )}
+                                      >
+                                        {sign(
+                                          profit,
+                                        )}
+                                        원 (
+                                        {s.avg > 0
+                                          ? `${(
+                                              (s.current /
+                                                s.avg -
+                                                1) *
+                                              100
+                                            ).toFixed(
+                                              2,
+                                            )}%`
+                                          : "—"}
+                                        )
+                                      </small>
+                                    </>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
+
+            {tab === 2 && (
+              <div className="grid two">
+                {[
+                  {
+                    name: "🏠 실물 자산",
+                    items: data.assets,
+                    debt: false,
+                  },
+                  {
+                    name: "💳 부채",
+                    items: data.debts,
+                    debt: true,
+                  },
+                ].map((g) => (
+                  <Card key={g.name}>
+                    <h2>{g.name}</h2>
+
+                    {!g.items.length && (
+                      <p className="empty">
+                        등록 내역이 없습니다.
+                      </p>
+                    )}
+
+                    {g.items.map((a, i) => (
+                      <div
+                        className="list"
+                        key={i}
+                      >
+                        <span>{a.name}</span>
+
+                        <b>
+                          {g.debt &&
+                          a.value > 0
+                            ? "−"
+                            : ""}
+                          {fmt(a.value)}원
+                        </b>
+                      </div>
+                    ))}
+                  </Card>
+                ))}
+              </div>
+            )}
+
+            {tab === 3 && (
+              <div className="stack">
+                <p className="note">
+                  현재 잔액 + 앞으로 납입할 원금 +
+                  오늘 이후 세전 단리 이자의
+                  추정치입니다. 과거 발생
+                  이자·세금·우대 조건은 제외합니다.
+                  오늘 납입분은 잔액에 포함된 것으로
+                  보고 만기일 당일 추가 납입은
+                  제외합니다.
+                </p>
+
+                {!data.savings.length && (
+                  <p className="empty">
+                    등록된 예적금이 없습니다.
+                  </p>
+                )}
+
+                {data.savings.map((s, i) => {
+                  const estimate =
+                    savingEstimate(
+                      s,
+                      today(),
+                    );
+
+                  return (
+                    <Card key={i}>
+                      <div className="row">
+                        <h2>{s.name}</h2>
+
+                        <small>
+                          {s.maturity
+                            ? `만기 ${s.maturity}`
+                            : "만기일 미등록"}
+                        </small>
+                      </div>
+
+                      <div className="grid four">
+                        <Stat
+                          label="현재 잔액"
+                          value={`${fmt(s.current)}원`}
+                        />
+
+                        <Stat
+                          label="월 납입액"
+                          value={`${fmt(s.monthly)}원`}
+                          sub={
+                            s.day
+                              ? `매월 ${s.day}일`
+                              : "이체일 미등록"
+                          }
+                        />
+
+                        <Stat
+                          label="연 금리"
+                          value={`${dec(s.rate)}%`}
+                        />
+
+                        <Stat
+                          label={
+                            estimate?.matured
+                              ? "만기 경과 · 잔액 확인"
+                              : "만기 단순 추정액"
+                          }
+                          value={
+                            estimate
+                              ? `${fmt(estimate.total)}원`
+                              : "계산 대기"
+                          }
+                          sub={
+                            estimate
+                              ? `앞으로 ${estimate.count}회 납입`
+                              : "만기일·이체일을 확인해주세요."
+                          }
+                        />
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+
+            {tab === 4 && (
+              <div className="stack">
+                <section className="hero">
+                  <p className="eyebrow">
+                    총 누적 실현손익
+                  </p>
+
+                  <h2
+                    className={tone(
+                      realized.total,
+                    )}
+                  >
+                    {sign(realized.total)}{" "}
+                    <small>원</small>
+                  </h2>
+                </section>
+
+                <div className="grid four">
+                  {realized.years.map(
+                    ([y, profit]) => (
+                      <Stat
+                        key={y}
+                        label={`${y}년 누계`}
+                        value={`${sign(profit)}원`}
+                      />
+                    ),
+                  )}
+                </div>
+
+                {!realized.months.length && (
+                  <p className="empty">
+                    실현손익 내역이 없습니다.
+                  </p>
+                )}
+
+                {realized.months.map(
+                  ([m, g]) => (
+                    <Card key={m}>
+                      <div className="row">
+                        <h2>{m} 결산</h2>
+
+                        <strong
+                          className={tone(
+                            g.total,
+                          )}
+                        >
+                          {sign(g.total)}원
+                        </strong>
+                      </div>
+
+                      <div className="table">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>날짜</th>
+                              <th>종목</th>
+                              <th>실현손익</th>
+                            </tr>
+                          </thead>
+
+                          <tbody>
+                            {g.items.map(
+                              (r, i) => (
+                                <tr key={i}>
+                                  <td>
+                                    {r.date}
+                                  </td>
+
+                                  <td>
+                                    {r.name}
+
+                                    {r.note && (
+                                      <small className="memo">
+                                        {r.note}
+                                      </small>
+                                    )}
+                                  </td>
+
+                                  <td
+                                    className={tone(
+                                      r.profit,
+                                    )}
+                                  >
+                                    {sign(
+                                      r.profit,
+                                    )}
+                                    원
+                                  </td>
+                                </tr>
+                              ),
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </Card>
+                  ),
+                )}
+              </div>
+            )}
+
+            {tab === 5 && (
+              <div className="stack">
+                <Card>
+                  <h2>목표가 저장</h2>
+
+                  <p className="muted">
+                    저장 비밀번호로 연결한 뒤
+                    목표가를 수정하세요. 저장하면
+                    컴퓨터와 휴대폰에서 같은 값을
+                    불러올 수 있습니다.
+                  </p>
+
+                  <div className="cloud">
+                    <input
+                      aria-label="목표가 저장 비밀번호"
+                      type="password"
+                      autoComplete="current-password"
+                      placeholder="Vercel에 설정한 저장 비밀번호"
+                      value={pass}
+                      disabled={cloudBusy}
+                      onChange={(e) =>
+                        setPass(e.target.value)
+                      }
+                    />
+
+                    <button
+                      disabled={
+                        cloudBusy ||
+                        !pass.trim()
+                      }
+                      onClick={() =>
+                        void cloud(false)
+                      }
+                    >
+                      {saved
+                        ? "저장값 불러오기"
+                        : "저장소 연결"}
+                    </button>
+
+                    <button
+                      className="active"
+                      disabled={
+                        cloudBusy ||
+                        !saved ||
+                        !dirty ||
+                        parsed.invalid ||
+                        !pass.trim()
+                      }
+                      onClick={() =>
+                        void cloud(true)
+                      }
+                    >
+                      목표가 저장
+                    </button>
+                  </div>
+
+                  <p
+                    className="meta"
+                    role="status"
+                  >
+                    {cloudMessage}
+                    {dirty &&
+                      " · 저장하지 않은 변경 있음"}
+                  </p>
+
+                  {!saved && (
+                    <small>
+                      연결 전에는 현재가 기준으로
+                      표시합니다. 저장 비밀번호는
+                      이 탭을 닫으면 지워지지만
+                      저장한 목표가는 남습니다.
+                    </small>
+                  )}
+
+                  {parsed.invalid && (
+                    <p className="alert">
+                      목표가는 0 이상 1조 이하
+                      숫자로 입력해주세요. 잘못된
+                      입력 중에는 마지막 저장값
+                      기준으로 계산합니다.
+                    </p>
+                  )}
+                </Card>
+
+                <div className="grid two">
+                  <Stat
+                    label="목표가 기준 주식 평가액 · 예수금 제외"
+                    value={`${fmt(
+                      simulation.reduce(
+                        (n, s) =>
+                          n + s.targetValue,
+                        0,
+                      ),
+                    )}원`}
+                    sub={`현재 대비 ${sign(extra)}원`}
+                  />
+
+                  <Stat
+                    label="목표가 기준 전체 순자산"
+                    value={`${fmt(net + extra)}원`}
+                    sub="예수금·실물·예적금·부채·환율은 현재 값 고정"
+                  />
+                </div>
+
+                <div className="grid two">
+                  {simulation.map((s) => (
+                    <Card key={s.id}>
+                      <div className="row">
+                        <div>
+                          <h2>{s.name}</h2>
+
+                          <small>
+                            {dec(s.qty)}주 ·{" "}
+                            {s.currency}
+                          </small>
+
+                          <p className="muted">
+                            현재가{" "}
+                            {dec(s.current)}
+                          </p>
+                        </div>
+
+                        <label className="target">
+                          목표가 ({s.currency})
+
+                          <input
+                            aria-label={`${s.name} 목표가`}
+                            type="text"
+                            inputMode="decimal"
+                            placeholder={String(
+                              s.current,
+                            )}
+                            value={
+                              drafts[s.id] ?? ""
+                            }
+                            disabled={
+                              !saved ||
+                              cloudBusy
+                            }
+                            onChange={(e) => {
+                              const value =
+                                e.target.value;
+
+                              setDrafts(
+                                (prev) => ({
+                                  ...prev,
+                                  [s.id]: value,
+                                }),
+                              );
+
+                              setDirty(true);
+                            }}
+                          />
+                        </label>
+                      </div>
+
+                      <div className="list">
+                        <span>
+                          현재 대비 변동액
+                        </span>
+
+                        <b
+                          className={tone(
+                            s.extra,
+                          )}
+                        >
+                          {sign(s.extra)}원
+                        </b>
+                      </div>
+
+                      <div className="list">
+                        <span>
+                          매입원가 대비 손익
+                        </span>
+
+                        <b
+                          className={tone(
+                            s.profit,
+                          )}
+                        >
+                          {sign(s.profit)}원
+
+                          <small>
+                            {s.cost > 0
+                              ? `${(
+                                  (s.profit /
+                                    s.cost) *
+                                  100
+                                ).toFixed(2)}%`
+                              : "수익률 —"}
+                          </small>
+                        </b>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+
+                {!simulation.length && (
+                  <p className="empty">
+                    시뮬레이션할 주식이 없습니다.
+                  </p>
+                )}
+
+                <p className="note">
+                  빈 목표가는 현재가를 사용합니다.
+                  같은 종목의 계좌별 현재가가
+                  다르면 수량 가중 평균을
+                  사용합니다. 매매·수수료·세금·환율
+                  변화는 반영하지 않습니다.
+                  실현손익은 순자산에 중복해서
+                  더하지 않습니다.
+                </p>
+              </div>
+            )}
+          </>
         )}
 
-        <footer className="mt-20 py-8 border-t border-slate-900 text-center">
-          <p className="text-slate-800 text-[10px] font-black tracking-widest uppercase italic">LG MDI Accounting Dept · Asset Master Full V3.9</p>
+        <footer>
+          ASSET MASTER V4 · PERSONAL FINANCE
         </footer>
       </div>
-    </div>
+    </main>
   );
 }
+
+const CSS = `
+.am4 {
+  min-height: 100vh;
+  background:
+    radial-gradient(
+      ellipse at 15% 0%,
+      #162b4c,
+      transparent 45%
+    ),
+    #0c0e14;
+  color: #e2e8f0;
+  font: 14px/1.6 Arial, sans-serif;
+  padding: 32px 20px;
+  color-scheme: dark;
+}
+
+.am4 * {
+  box-sizing: border-box;
+}
+
+.am4 .wrap {
+  max-width: 1120px;
+  margin: auto;
+}
+
+.am4 h1,
+.am4 h2,
+.am4 p {
+  margin: 0;
+}
+
+.am4 h1 {
+  font-size: clamp(26px, 4vw, 38px);
+  font-weight: 900;
+  letter-spacing: -1px;
+}
+
+.am4 h1 span {
+  color: #60a5fa;
+}
+
+.am4 h2 {
+  font-size: 19px;
+  font-weight: 800;
+}
+
+.am4 strong {
+  font-size: 22px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.am4 small {
+  display: block;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.am4 button,
+.am4 input {
+  font: inherit;
+}
+
+.am4 button {
+  border: 1px solid #334155;
+  background: #192333;
+  color: #dbeafe;
+  padding: 10px 15px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.am4 button:hover:not(:disabled) {
+  background: #294262;
+}
+
+.am4 button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.am4 input {
+  border: 1px solid #475569;
+  background: #080e1a;
+  color: white;
+  padding: 11px;
+  border-radius: 10px;
+  min-width: 0;
+  width: 100%;
+}
+
+.am4 button:focus-visible,
+.am4 input:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 3px;
+}
+
+.am4 .active {
+  background: #2563eb;
+  border-color: #3b82f6;
+  color: white;
+}
+
+.am4 header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding-bottom: 24px;
+  border-bottom: 1px solid #253044;
+}
+
+.am4 .eyebrow {
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: #93c5fd;
+  margin-bottom: 8px;
+}
+
+.am4 nav {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 24px 0;
+}
+
+.am4 nav button {
+  white-space: nowrap;
+}
+
+.am4 .meta {
+  font-size: 12px;
+  color: #94a3b8;
+  margin: 12px 0 18px;
+}
+
+.am4 .muted {
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.am4 .card,
+.am4 .stat {
+  background: #111a29eb;
+  border: 1px solid #283449;
+  border-radius: 22px;
+  padding: 24px;
+  min-width: 0;
+}
+
+.am4 .card h2 {
+  margin-bottom: 12px;
+}
+
+.am4 .stat {
+  padding: 18px;
+}
+
+.am4 .stat strong {
+  display: block;
+  margin: 6px 0;
+  font-size: 20px;
+}
+
+.am4 .hero {
+  background: linear-gradient(
+    120deg,
+    #153057,
+    #141d2c 80%
+  );
+  border: 1px solid #315080;
+  border-radius: 30px;
+  padding: 36px;
+}
+
+.am4 .hero h2 {
+  font-size: clamp(28px, 5vw, 60px);
+  font-weight: 900;
+  letter-spacing: -1.5px;
+  overflow-wrap: anywhere;
+}
+
+.am4 .hero h2 small {
+  display: inline;
+  font-size: 20px;
+}
+
+.am4 .hero .row {
+  margin-top: 24px;
+}
+
+.am4 .grid {
+  display: grid;
+  gap: 16px;
+}
+
+.am4 .two {
+  grid-template-columns:
+    repeat(2, minmax(0, 1fr));
+}
+
+.am4 .four {
+  grid-template-columns:
+    repeat(4, minmax(0, 1fr));
+}
+
+.am4 .stack {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.am4 .row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.am4 .right {
+  text-align: right;
+}
+
+.am4 .row + .grid {
+  margin-top: 18px;
+}
+
+.am4 .up {
+  color: #fb7185;
+}
+
+.am4 .down {
+  color: #60a5fa;
+}
+
+.am4 .alert {
+  background: #352a16;
+  border: 1px solid #8a632a;
+  border-radius: 12px;
+  color: #fde68a;
+  padding: 14px;
+  margin-bottom: 14px;
+}
+
+.am4 .empty {
+  padding: 32px;
+  text-align: center;
+  color: #94a3b8;
+}
+
+.am4 .note {
+  font-size: 12px;
+  line-height: 1.8;
+  color: #94a3b8;
+}
+
+.am4 .table {
+  overflow-x: auto;
+  margin-top: 16px;
+}
+
+.am4 table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 620px;
+  font-variant-numeric: tabular-nums;
+}
+
+.am4 th,
+.am4 td {
+  padding: 14px 10px;
+  border-bottom: 1px solid #253044;
+  text-align: left;
+}
+
+.am4 th {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.am4 th:not(:first-child),
+.am4 td:not(:first-child) {
+  text-align: right;
+}
+
+.am4 .memo {
+  white-space: pre-wrap;
+}
+
+.am4 .list {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 0;
+  border-bottom: 1px solid #253044;
+}
+
+.am4 .list b {
+  text-align: right;
+}
+
+.am4 .target {
+  width: 160px;
+  font-size: 12px;
+  color: #a5b4fc;
+}
+
+.am4 .target input {
+  text-align: right;
+  margin-top: 6px;
+  font-size: 16px;
+}
+
+.am4 .cloud {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+
+.am4 .cloud input {
+  flex: 1 1 220px;
+}
+
+.am4 footer {
+  margin-top: 60px;
+  padding: 24px 0;
+  border-top: 1px solid #253044;
+  text-align: center;
+  color: #64748b;
+  font-size: 11px;
+}
+
+@media (max-width: 800px) {
+  .am4 .four {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+
+  .am4 .two {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .am4 {
+    padding: 20px 12px;
+  }
+
+  .am4 .card,
+  .am4 .hero {
+    padding: 20px;
+  }
+
+  .am4 .stat {
+    padding: 14px;
+  }
+
+  .am4 .right {
+    text-align: left;
+  }
+
+  .am4 strong {
+    font-size: 19px;
+  }
+}
+`;
