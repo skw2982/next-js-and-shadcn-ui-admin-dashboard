@@ -92,9 +92,11 @@ type Saved = {
 };
 
 const fmt = (n: number) =>
-  n.toLocaleString("ko-KR", {
-    maximumFractionDigits: 0,
-  });
+  Number.isFinite(n)
+    ? n.toLocaleString("ko-KR", {
+        maximumFractionDigits: 0,
+      })
+    : "—";
 
 const dec = (n: number) =>
   n.toLocaleString("ko-KR", {
@@ -102,10 +104,18 @@ const dec = (n: number) =>
   });
 
 const sign = (n: number) =>
-  `${n > 0 ? "+" : ""}${fmt(n)}`;
+  Number.isFinite(n)
+    ? `${n > 0 ? "+" : ""}${fmt(n)}`
+    : "—";
 
 const tone = (n: number) =>
-  n > 0 ? "up" : n < 0 ? "down" : "muted";
+  !Number.isFinite(n)
+    ? "muted"
+    : n > 0
+      ? "up"
+      : n < 0
+        ? "down"
+        : "muted";
 
 const time = (s: string) =>
   new Date(s).toLocaleString("ko-KR", {
