@@ -510,114 +510,123 @@ export default function AssetMaster() {
       const warnings: string[] = [];
       const stocks: Stock[] = [];
 
-      for (const [i, c] of csv(
-        sText,
-        9,
-        "주식",
-      ).entries()) {
-        const label = `주식 ${i + 2}행`;
-        const qty = num(
-          c[7],
-          `${label} 수량`,
+for (const [i, c] of csv(sText, 9, "주식").entries()) {
+  const label = `주식 ${i + 2}행`;
+  const qty = num(c[7], `${label} 수량`);
+
+  if (qty === 0) continue;
+
+  if (qty < 0 || !c[0] || !c[1] || !c[2]) {
+    throw new Error(
+      `${label}: 시장·계좌·종목명·수량을 확인해주세요.`,
+    );
+  }
+
+  const cash = /예수금|현금/.test(c[2]);
+  const foreign = c[0].includes("해외");
+
+  // J열은 전일가이므로 통화로 읽지 않습니다.
+  const currency = foreign
+    ? cash
+      ? CONFIG.overseasCash
+      : "USD"
+    : "KRW";
+
+  if (cash && qty !== 1) {
+    throw new Error(
+      `${label}: 예수금은 수량 1, 현재가 칸에 잔액을 입력해주세요.`,
+    );
+  }
+
+  if (cash && foreign) {
+    warnings.push(
+      `해외 예수금은 ${CONFIG.overseasCash}로 환산합니다. 실제 입력 통화를 확인해주세요.`,
+    );
+  }
+
+  if (!cash && !foreign && c[1].includes("해외")) {
+    warnings.push(
+      `${c[2]}: 해외 계좌이지만 A열이 국내여서 원화로 계산합니다. 달러 거래 종목이면 A열을 해외로 바꿔주세요.`,
+    );
+  }
+
+  const current = num(c[6], `${label} 현재가`);
+  const avg = cash ? 0 : num(c[5], `${label} 평단`);
+
+  if (current < 0 || avg < 0) {
+    throw new Error(
+      `${label}: 가격은 음수일 수 없습니다.`,
+    );
+  }
+
+  const optionalNumber = (
+    raw: string | undefined,
+  ): number | null => {
+    try {
+      return num(raw, label);
+    } catch {
+      return null;
+    }
+  };
+
+  const previous = optionalNumber(c[9]);   // J열 전일가
+  const inputDaily = optionalNumber(c[8]); // I열 전일비
+
+  // 전일비가 없으면 0원이 아닌 미확인값으로 처리합니다.
+  let change = cash ? 0 : Number.NaN;
+
+  if (!cash) {
+    if (previous !== null && previous > 0) {
+      change = current - previous;
+
+      if (
+        inputDaily !== null &&
+        Math.abs(inputDaily - change) > 0.000001
+      ) {
+        warnings.push(
+          `${c[2]}: I열 전일비와 G열−J열이 달라 현재가−전일가로 계산했습니다.`,
         );
-
-        if (qty === 0) continue;
-
-        if (
-          qty < 0 ||
-          !c[0] ||
-          !c[1] ||
-          !c[2]
-        ) {
-          throw new Error(
-            `${label}: 시장·계좌·종목명·수량을 확인해주세요.`,
-          );
-        }
-
-        const cash =
-          /예수금|현금/.test(c[2]);
-
-        const foreign =
-          c[0].includes("해외");
-
-        const currency =
-          c[9]?.toUpperCase() ||
-          (foreign
-            ? cash
-              ? CONFIG.overseasCash
-              : "USD"
-            : "KRW");
-
-        if (
-          !["KRW", "USD"].includes(currency)
-        ) {
-          throw new Error(
-            `${label}: J열 통화는 KRW 또는 USD로 입력해주세요.`,
-          );
-        }
-
-        if (cash && qty !== 1) {
-          throw new Error(
-            `${label}: 예수금은 수량 1, 현재가 칸에 잔액을 입력해주세요.`,
-          );
-        }
-
-        if (
-          cash &&
-          foreign &&
-          !c[9]
-        ) {
-          warnings.push(
-            `해외 예수금은 ${CONFIG.overseasCash}로 가정합니다. J열에 실제 통화를 적어주세요.`,
-          );
-        }
-
-        const current = num(
-          c[6],
-          `${label} 현재가`,
-        );
-
-        const avg = cash
-          ? 0
-          : num(c[5], `${label} 평단`);
-
-        const daily = cash
-          ? 0
-          : num(c[8], `${label} I열`);
-
-        if (
-          current < 0 ||
-          avg < 0 ||
-          (CONFIG.dailyKind ===
-            "previousClose" &&
-            daily < 0)
-        ) {
-          throw new Error(
-            `${label}: 가격은 음수일 수 없습니다.`,
-          );
-        }
-
-        stocks.push({
-          id: JSON.stringify([
-            c[0],
-            currency,
-            c[3] || c[2],
-          ]),
-          account: c[1],
-          name: c[2],
-          currency,
-          cash,
-          qty,
-          current,
-          avg,
-          change: cash
-            ? 0
-            : CONFIG.dailyKind ===
-                "previousClose"
-              ? current - daily
-              : daily,
-        });
       }
+    } else if (
+      inputDaily !== null &&
+      current - inputDaily > 0
+    ) {
+      change = inputDaily;
+    }
+
+    if (!Number.isFinite(change)) {
+      warnings.push(
+        `${c[2]}: 전일비를 확인할 수 없어 해당 종목·계좌·전체 전일손익을 —로 표시합니다. 현재 평가액과 순자산은 계산에 포함합니다.`,
+      );
+    }
+  }
+
+  const id = JSON.stringify([
+    c[0],
+    currency,
+    c[3] || c[2],
+  ]);
+
+  const other = stocks.find((s) => s.id === id);
+
+  if (!cash && other && other.current !== current) {
+    warnings.push(
+      `${c[2]}: 계좌별 현재가가 다릅니다. 평가액은 각 행의 가격, 시뮬레이션 현재가는 수량 가중 평균을 사용합니다.`,
+    );
+  }
+
+  stocks.push({
+    id,
+    account: c[1],
+    name: c[2],
+    currency,
+    cash,
+    qty,
+    current,
+    avg,
+    change,
+  });
+}
 
       const rate =
         fx?.result === "success" &&
